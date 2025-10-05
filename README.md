@@ -41,6 +41,6 @@ countdown.tar  カウントダウン表示（フリー素材）\
 sig.......tar  とある動画のモーション部分（再利用可となっているので配布）\
 copyright.txt  動画の出典
 
-view.py  再生表示するファイル  import view し view.run() で起動します
-
+view.py  再生表示するファイル  import view し view.run() で起動します\
+  前記の tar ファイルを /sd から読み込んで表示します。
 
