@@ -1,12 +1,12 @@
-#micropython for picocalc with JPEGDEC
-bitbank2/JPEGDEC ���g�p���āApicocalc �� jpeg�f�R�[�_��ǉ�����B
+# micropython for picocalc with JPEGDEC
+bitbank2/JPEGDEC を使用して、picocalc に jpegデコーダを追加する。
 
-zenodante/PicoCalc-micropython-driver ��啝�ɉ������Ă���̂ŁA���{�� fork �������̂Ƃ͕ʂ̃��|�W�g���ɂ���
+zenodante/PicoCalc-micropython-driver を大幅に改造しているので、原本を fork したものとは別のリポジトリにした
 
 
-#build�̑O��
+## buildの前提
 
-bitbank2/JPEGDEC �͈ȉ��̃f�B���N�g���\���ɍ��킹�� clone ���Ă�������
+bitbank2/JPEGDEC は以下のディレクトリ構成に合わせて clone しておくこと
 
 ```
   picocalc_viewer/		this repository
@@ -17,31 +17,30 @@ bitbank2/JPEGDEC �͈ȉ��̃f�B���N�g���\���ɍ��킹�� clone ���Ă�������
   JPEGDEC/			    bitbank2/JPEGDEC
 ```
 
-##�r���h�菇
+### ビルド手順
 
-pico_files/modules �̃t�@�C����micropython �r���h���ɃR�s�[�imicropython/ports/rp2/modules�j
+pico_files/modules のファイルをmicropython ビルド環境にコピー（micropython/ports/rp2/modules）
 
-�ȉ��̃R�}���h�Ńr���h
+以下のコマンドでビルド
 ```sh
 cd micropython/ports/rp2
 make USER_C_MODULES="Path/To/picocalc_viewer/micropython.cmake" \
-  BOARD=[TARGET_BOARD]
+  BOARD=RPI_PICO2_W
 ```
 
-����m�F���� `TARGET_BOARD` ��
-- `RPI_PICO2_W`
-
-�Ō�� boot.py ���t�@�C���V�X�e���փR�s�[
+ファームウェアを書き込んだ後に boot.py を ROMFSへコピーする
 
 
-#�z�z�t�@�C������
+## 配布ファイル説明
 
-picocalc-micropython-jpegdec-NOFLASH.uf2  �t�@�[���E�F�A ROMFS �����͂���܂���BROMFS����̌����t�@�[�����܂���������ł��������B
+picocalc-micropython-jpegdec-NOFLASH.uf2  ビルド済みファームウェア。 ROMFS 部分はありません。ROMFSありの公式ファームをまず書き込んでください。
 
-boot.py �����ł̓t�@�[���ɏ������ݍς݂��������A�C�����ȈՂɂ��邽�ߊO���ɏo�����B
+boot.py 公式ファームは書き変え不可だったが、修正を簡易にするため外部に出した。
 
-countdown.tar  �J�E���g�_�E���\���i�t���[�f�ށj\
-sig.......tar  �Ƃ��铮��̃��[�V���������i�ė��p�ƂȂ��Ă���̂Ŕz�z�j
+countdown.tar  カウントダウン表示（フリー素材）\
+sig.......tar  とある動画のモーション部分（再利用可となっているので配布）\
+copyright.txt  動画の出典
 
-view.py  �Đ��\������t�@�C��  import view �� view.run() �ŋN�����܂�
+view.py  再生表示するファイル  import view し view.run() で起動します
+
 
