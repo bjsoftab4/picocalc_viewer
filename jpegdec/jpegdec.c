@@ -137,10 +137,22 @@ static mp_obj_t jpegdec_decodex2(size_t n_args, const mp_obj_t *args) {
 
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decodex2_obj, 2, 2, jpegdec_decodex2);
+#define FIFO_CMD_DONE (0xffff0ff0)
+
+uint32_t JPEG_msg_core1;
 
 int core1_decode_is_busy() {
+    uint32_t result;
+    bool flag;
     if (core1_running == 1) {
         return 1;
+    }
+    result = 0;
+    flag = multicore_fifo_pop_timeout_us (100, &result);   // wait 100us
+    if( flag ) {
+        JPEG_msg_core1 = result;
+    } else {
+        //JPEG_msg_core1 = 0xff;
     }
     return 0;
 }
@@ -192,6 +204,7 @@ void decode_core1_main() {
     JPEGSetViewPage(pageNum);
 
     core1_running = 2;
+    multicore_fifo_push_timeout_us (FIFO_CMD_DONE, 1000);   // wait 1000us
 }
 void decode_core0_main() {
     core1_running = 1;
@@ -201,6 +214,7 @@ void decode_core0_main() {
     JPEGSetViewPage(pageNum);
 
     core1_running = 2;
+    multicore_fifo_push_timeout_us (FIFO_CMD_DONE, 1000);   // wait 1000us
 }
 
 
@@ -246,17 +260,15 @@ static mp_obj_t jpegdec_decode_core(size_t n_args, const mp_obj_t *args) {
     result = 1;
     if (run_core == 0) {
         result = 1;
-//		result = decode_core1_epilogue();
     }
     if (run_core == 1) {
         result = 1;
-        // result = decode_core1_epilogue();
     }
 
     mp_obj_t res[3] = {
         mp_obj_new_int(result),
         mp_obj_new_int(_jpeg.iWidth),
-        mp_obj_new_int(_jpeg.iHeight)
+        mp_obj_new_int(_jpeg.iHeight),
     };
 
     return mp_obj_new_tuple(3, res);
@@ -268,7 +280,7 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_core_obj, 2, 3, jpegde
 
 static mp_obj_t jpegdec_decode_core_wait(size_t n_args, const mp_obj_t *args) {
     int result = 1;
-    int res1 = (int)core1_running;
+    int res1 = 0;
     int res2 = 0;
     if (n_args == 1) {          // force stop
         if (Coremode == 1) {
@@ -280,11 +292,10 @@ static mp_obj_t jpegdec_decode_core_wait(size_t n_args, const mp_obj_t *args) {
         while (core1_decode_is_busy()) {
             tight_loop_contents();
         }
-        res2 = (int)core1_running;
-//		if (core1_running == 2){
-        result = decode_core1_epilogue();
-        core1_running = 0;
-        // }
+        if (core1_running == 2) {
+            result = decode_core1_epilogue();
+            core1_running = 0;
+        }
     }
     int res3 = (int)core1_running;
     mp_obj_t res[4] = {
@@ -348,7 +359,7 @@ static mp_obj_t jpegdec_decode(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_obj, 2, 2, jpegdec_decode);
 
-
+// decode_opt runs with multicore
 static mp_obj_t jpegdec_decode_opt(size_t n_args, const mp_obj_t *args) {
     int result;
     mp_buffer_info_t inbuf;
@@ -406,6 +417,259 @@ static mp_obj_t jpegdec_decode_opt(size_t n_args, const mp_obj_t *args) {
 
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_opt_obj, 1, 4, jpegdec_decode_opt);
+
+// decode_split runs with multicore
+#define FBUFFER_MAX (2)
+#define INVALID_MESSAGE (0xffffffff)
+volatile struct st_filebuffer {
+	int32_t pos;
+	int32_t size;		// if size == 0, this buffer is useless
+	uint8_t *pbuf;
+} JPEG_fbuffer[FBUFFER_MAX];
+
+volatile uint32_t core_message_box;
+volatile uint32_t core_message_box2;
+
+uint32_t get_message_box(){
+	return core_message_box;
+}
+
+void set_message_box(uint32_t msg){
+	core_message_box = msg;
+}
+
+uint32_t get_message_box2(){
+	return core_message_box2;
+}
+
+void set_message_box2(uint32_t msg){
+	core_message_box2 = msg;
+}
+
+void init_fbuffer()
+{
+	int i;
+	for( i = 0; i < FBUFFER_MAX; i++) {
+		JPEG_fbuffer[i].size = 0;
+	}
+    set_message_box(INVALID_MESSAGE);
+}
+
+void set_fbuffer(uint32_t bufnum, uint32_t pos, uint8_t *pbuf, uint32_t size)
+{
+	if( bufnum < FBUFFER_MAX) {
+		JPEG_fbuffer[bufnum].pos = pos;
+		JPEG_fbuffer[bufnum].pbuf = pbuf;
+		JPEG_fbuffer[bufnum].size = size;	// set size at last
+	}
+}
+
+static int testBuffer(int32_t iPos, int32_t iLen) {
+    int i;
+    int retc = -1;
+    int32_t bufPos, bufLen;
+    
+	for( i = 0; i < FBUFFER_MAX; i++) {
+		if( JPEG_fbuffer[i].size == 0 ) {
+			continue;
+		}
+        bufPos = JPEG_fbuffer[i].pos;
+	    bufLen =  JPEG_fbuffer[i].size;
+		if( bufPos <= iPos && iPos + iLen <= bufPos + bufLen) {
+			retc = i;
+			break;
+		}
+	}
+    return retc;
+}
+
+
+static int32_t readRAM_split(JPEGFILE *pFile, uint8_t *pBuf, int32_t iLen)
+{
+	uint8_t *pFilebuf;
+    int rc;
+    int offset, iBytesRead;
+    
+    while( (rc = testBuffer(pFile->iPos, iLen)) < 0) {
+        set_message_box2(iLen);
+        set_message_box(pFile->iPos);
+    }
+
+    pFilebuf = JPEG_fbuffer[rc].pbuf;
+    offset = pFile->iPos - JPEG_fbuffer[rc].pos;
+    iBytesRead = iLen;
+    memcpy(pBuf, &pFilebuf[offset], iBytesRead);
+    pFile->iPos += iBytesRead;
+    return iBytesRead;
+} /* readRAM_split() */
+
+
+static int32_t seekMem_split(JPEGFILE *pFile, int32_t iPosition)
+{
+    if (iPosition < 0) iPosition = 0;
+    else if (iPosition >= pFile->iSize) iPosition = pFile->iSize-1;
+    pFile->iPos = iPosition;
+    return iPosition;
+} /* seekMem_split() */
+
+static void jpeg_param_init_split(JPEGIMAGE *pJpeg, int iDataSize, uint8_t *pData, JPEG_DRAW_CALLBACK func) {
+    JPEGGetDisp(&disp_width, &disp_height);
+    memset((void *)pJpeg, 0, sizeof(JPEGIMAGE));
+    pJpeg->ucMemType = JPEG_MEM_RAM;
+    pJpeg->pfnRead = readRAM_split;
+    pJpeg->pfnSeek = seekMem_split;
+    pJpeg->pfnDraw = func;
+    pJpeg->pfnOpen = NULL;
+    pJpeg->pfnClose = NULL;
+    pJpeg->pUser = NULL;
+    pJpeg->iError = 1111;
+    pJpeg->JPEGFile.iSize = iDataSize;
+    pJpeg->JPEGFile.pData = pData;
+    pJpeg->ucPixelType = RGB565_BIG_ENDIAN;
+    pJpeg->iMaxMCUs = 1000; // set to an unnaturally high value to start
+}
+
+void decode_core1_split() {
+    multicore_lockout_victim_init();
+    core1_running = 1;
+    core1_result = DecodeJPEG(&_jpeg);
+    JPEGWaitDma();
+    core1_running = 2;
+}
+
+static mp_obj_t jpegdec_decode_split_wait(size_t n_args, const mp_obj_t *args) {
+    int result = 0;
+    int res1 = INVALID_MESSAGE;
+    int res2 = 0;
+    if( core1_running == 1) {   // core1 is running
+        res1 = get_message_box();
+        res2 = get_message_box2();
+        if( res1 != INVALID_MESSAGE) {
+            set_message_box(INVALID_MESSAGE);
+        }
+    } else if (core1_running == 2) {    // core1 done
+        res2 = (int)JPEG_msg_core1;     // core1 result
+        res1 = decode_core1_epilogue();
+        core1_running = 0;
+        result = 1;
+    } else {                            // core1 does nothing
+        result = 1;
+    }
+    mp_obj_t res[3] = {
+        mp_obj_new_int(result), // 0: running, 1: done
+        mp_obj_new_int(res1),   // if result==0 : message_box(required filepointer)
+        mp_obj_new_int(res2)    // core1 result
+    };
+
+    return mp_obj_new_tuple(3, res);
+
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_split_wait_obj, 0, 1, jpegdec_decode_split_wait);
+
+static mp_obj_t jpegdec_decode_split_buffer(size_t n_args, const mp_obj_t *args) {
+    // buffer num, filepointer, buffer
+    mp_buffer_info_t inbuf;
+    int result = 0;
+    
+    int bufnum = mp_obj_get_int(args[0]);
+    int filepos = mp_obj_get_int(args[1]);
+    if( bufnum < FBUFFER_MAX) {
+        mp_get_buffer_raise(args[2], &inbuf, MP_BUFFER_READ);
+        set_fbuffer(bufnum, filepos, (uint8_t *)inbuf.buf, inbuf.len);
+        result = 1;
+    }
+    
+    mp_obj_t res[1] = {
+        mp_obj_new_int(result),
+    };
+
+    return mp_obj_new_tuple(1, res);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_split_buffer_obj, 3, 3, jpegdec_decode_split_buffer);
+
+static mp_obj_t jpegdec_decode_split(size_t n_args, const mp_obj_t *args) {
+    // args[0] filesize, args[1] buf, [ args[2] ofset, args[3] clip, args[4] option ]
+    int result = 0;
+    int result0 = -1;
+    mp_buffer_info_t inbuf;
+
+    mp_obj_t *tuple_data = NULL;
+    size_t tuple_len = 0;
+    int fileSize;
+    
+    while (core1_decode_is_busy()) {
+        tight_loop_contents();
+    }
+    if (core1_running == 2) {
+        result0 = decode_core1_epilogue();
+        core1_running = 0;
+    }
+
+    init_fbuffer();
+    
+    fileSize = mp_obj_get_int(args[0]);
+    mp_get_buffer_raise(args[1], &inbuf, MP_BUFFER_READ);
+    set_fbuffer(0, 0, (uint8_t *)inbuf.buf, inbuf.len);
+
+    bool f_clip = false;
+    int ofst_x = 0, ofst_y = 0, clip_x, clip_y, clip_w, clip_h;
+    int ioption = 0;
+    // get tuple
+    if (n_args >= 3) {
+        if (args[2] != mp_const_none) {
+            mp_obj_tuple_get(args[2], &tuple_len, &tuple_data);
+            if (tuple_len >= 2) {
+                ofst_x = mp_obj_get_int(tuple_data[0]);
+                ofst_y = mp_obj_get_int(tuple_data[1]);
+            }
+        }
+    }
+    if (n_args >= 4) {
+        if (args[3] != mp_const_none) {
+            mp_obj_tuple_get(args[3], &tuple_len, &tuple_data);
+            if (tuple_len >= 4) {
+                f_clip = true;
+                clip_x = mp_obj_get_int(tuple_data[0]);
+                clip_y = mp_obj_get_int(tuple_data[1]);
+                clip_w = mp_obj_get_int(tuple_data[2]);
+                clip_h = mp_obj_get_int(tuple_data[3]);
+            }
+        }
+    }
+    if (n_args >= 5) {
+        ioption = mp_obj_get_int(args[4]);
+    }
+    
+
+    jpeg_param_init_split(&_jpeg, fileSize, inbuf.buf, JPEGDraw);
+    result = JPEGInit(&_jpeg);
+    if (result == 1) {
+        _jpeg.iXOffset = ofst_x;
+        _jpeg.iYOffset = ofst_y;
+        _jpeg.iOptions = ioption | JPEG_USES_DMA;
+        _jpeg.ucPixelType = RGB565_BIG_ENDIAN;
+        if ( f_clip ) {
+            JPEG_setCropArea(&_jpeg, clip_x, clip_y, clip_w, clip_h);
+        }
+        JPEGModeChange(0);
+
+        multicore_reset_core1();
+        multicore_launch_core1_with_stack(decode_core1_split, core1_stack, CORE1_STACK_SIZE);
+    }
+
+    mp_obj_t res[4] = {
+        mp_obj_new_int(result),
+        mp_obj_new_int(_jpeg.iWidth),
+        mp_obj_new_int(_jpeg.iHeight),
+        mp_obj_new_int(result0),
+    };
+
+    return mp_obj_new_tuple(4, res);
+    // if( result == 0) result = _jpeg.iError;
+    // return mp_obj_new_int(result);
+
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_split_obj, 2, 5, jpegdec_decode_split);
 
 static mp_obj_t jpegdec_start(size_t n_args, const mp_obj_t *args) {
     int drawmode = mp_obj_get_int(args[0]);     // mode 0:simple, 1:flip screen
@@ -529,11 +793,13 @@ static const mp_rom_map_elem_t jpegdec_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_decode_core), MP_ROM_PTR(&jpegdec_decode_core_obj)},
     {MP_ROM_QSTR(MP_QSTR_decode_opt), MP_ROM_PTR(&jpegdec_decode_opt_obj)},
     {MP_ROM_QSTR(MP_QSTR_decode_core_wait), MP_ROM_PTR(&jpegdec_decode_core_wait_obj)},
+    {MP_ROM_QSTR(MP_QSTR_decode_split), MP_ROM_PTR(&jpegdec_decode_split_obj)},
+    {MP_ROM_QSTR(MP_QSTR_decode_split_wait), MP_ROM_PTR(&jpegdec_decode_split_wait_obj)},
+    {MP_ROM_QSTR(MP_QSTR_decode_split_buffer), MP_ROM_PTR(&jpegdec_decode_split_buffer_obj)},
     {MP_ROM_QSTR(MP_QSTR_setview), MP_ROM_PTR(&jpegdec_setview_obj)},
 };
 static MP_DEFINE_CONST_DICT(jpegdec_globals, jpegdec_globals_table);
 /* methods end */
-
 
 const mp_obj_module_t jpegdec_cmodule = {
     .base = {&mp_type_module},
