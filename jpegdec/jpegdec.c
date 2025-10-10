@@ -43,7 +43,7 @@ static int JPEGDraw(JPEGDRAW *pDraw) {
 
 
 static int JPEGDrawx2(JPEGDRAW *pDraw) {
-    #if 0 //under construction
+    #if 0 // under construction
     uint16_t *pBuf1 = pDraw->pPixels;
     mp_int_t x = pDraw->x;
     mp_int_t y = pDraw->y;
@@ -148,29 +148,17 @@ int core1_decode_is_busy() {
         return 1;
     }
     result = 0;
-    flag = multicore_fifo_pop_timeout_us (100, &result);   // wait 100us
-    if( flag ) {
+    flag = multicore_fifo_pop_timeout_us(100, &result);    // wait 100us
+    if (flag) {
         JPEG_msg_core1 = result;
     } else {
-        //JPEG_msg_core1 = 0xff;
+        // JPEG_msg_core1 = 0xff;
     }
     return 0;
 }
 
-static int decode_core1_epilogue() {
-//	int drawmode = (int)JPEGGetMode();
-    while (core1_decode_is_busy()) {
-        tight_loop_contents();
-    }
-//	if(drawmode == 0) {
-//	} else if( drawmode == 1) {
-//		uint8_t pageNum = JPEGGetDrawPage();
-//		JPEGSetViewPage(pageNum);
-//	}
-    return core1_result;
-}
 
-static void decode_core1_prologue(int drawmode, JPEGIMAGE *pJpeg, int iDataSize, uint8_t *pData, JPEG_DRAW_CALLBACK func) {
+static void decode_core1_prepare(int drawmode, JPEGIMAGE *pJpeg, int iDataSize, uint8_t *pData, JPEG_DRAW_CALLBACK func) {
     int result;
     jpeg_param_init(pJpeg, iDataSize, pData, func);
     result = JPEGInit(&_jpeg);
@@ -204,7 +192,7 @@ void decode_core1_main() {
     JPEGSetViewPage(pageNum);
 
     core1_running = 2;
-    multicore_fifo_push_timeout_us (FIFO_CMD_DONE, 1000);   // wait 1000us
+    multicore_fifo_push_timeout_us(FIFO_CMD_DONE, 1000);    // wait 1000us
 }
 void decode_core0_main() {
     core1_running = 1;
@@ -214,7 +202,7 @@ void decode_core0_main() {
     JPEGSetViewPage(pageNum);
 
     core1_running = 2;
-    multicore_fifo_push_timeout_us (FIFO_CMD_DONE, 1000);   // wait 1000us
+    multicore_fifo_push_timeout_us(FIFO_CMD_DONE, 1000);    // wait 1000us
 }
 
 
@@ -251,11 +239,11 @@ static mp_obj_t jpegdec_decode_core(size_t n_args, const mp_obj_t *args) {
         tight_loop_contents();
     }
     if (core1_running == 2) {
-        result = decode_core1_epilogue();
+        result = core1_result;
         core1_running = 0;
     }
 
-    decode_core1_prologue(drawmode, &_jpeg, iDataSize, pData, JPEGDraw);
+    decode_core1_prepare(drawmode, &_jpeg, iDataSize, pData, JPEGDraw);
     decode_core1_body(&_jpeg, run_core);
     result = 1;
     if (run_core == 0) {
@@ -282,20 +270,28 @@ static mp_obj_t jpegdec_decode_core_wait(size_t n_args, const mp_obj_t *args) {
     int result = 1;
     int res1 = 0;
     int res2 = 0;
+    int timeout;
     if (n_args == 1) {          // force stop
+        timeout = mp_obj_get_int(args[0]);
+    } else {
+        timeout = 1000;
+    }
+    for ( ; timeout >= 0; timeout --) {
+        if (core1_decode_is_busy() == 0) {
+            break;
+        }
+        sleep_ms(1);
+    }
+    if (timeout < 0) {
         if (Coremode == 1) {
             multicore_reset_core1();
-            result = decode_core1_epilogue();
             core1_running = 0;
+            result = 0;
         }
-    } else {
-        while (core1_decode_is_busy()) {
-            tight_loop_contents();
-        }
-        if (core1_running == 2) {
-            result = decode_core1_epilogue();
-            core1_running = 0;
-        }
+    } 
+    if (core1_running == 2) {
+        result = core1_result;
+        core1_running = 0;
     }
     int res3 = (int)core1_running;
     mp_obj_t res[4] = {
@@ -404,7 +400,7 @@ static mp_obj_t jpegdec_decode_opt(size_t n_args, const mp_obj_t *args) {
         result = DecodeJPEG(&_jpeg);
         JPEGWaitDma();
     }
-    
+
     mp_obj_t res[3] = {
         mp_obj_new_int(result),
         mp_obj_new_int(_jpeg.iWidth),
@@ -422,75 +418,72 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_opt_obj, 1, 4, jpegdec
 #define FBUFFER_MAX (2)
 #define INVALID_MESSAGE (0xffffffff)
 volatile struct st_filebuffer {
-	int32_t pos;
-	int32_t size;		// if size == 0, this buffer is useless
-	uint8_t *pbuf;
+    int32_t pos;
+    int32_t size;               // if size == 0, this buffer is useless
+    uint8_t *pbuf;
 } JPEG_fbuffer[FBUFFER_MAX];
 
 volatile uint32_t core_message_box;
 volatile uint32_t core_message_box2;
 
-uint32_t get_message_box(){
-	return core_message_box;
+uint32_t get_message_box() {
+    return core_message_box;
 }
 
-void set_message_box(uint32_t msg){
-	core_message_box = msg;
+void set_message_box(uint32_t msg) {
+    core_message_box = msg;
 }
 
-uint32_t get_message_box2(){
-	return core_message_box2;
+uint32_t get_message_box2() {
+    return core_message_box2;
 }
 
-void set_message_box2(uint32_t msg){
-	core_message_box2 = msg;
+void set_message_box2(uint32_t msg) {
+    core_message_box2 = msg;
 }
 
-void init_fbuffer()
-{
-	int i;
-	for( i = 0; i < FBUFFER_MAX; i++) {
-		JPEG_fbuffer[i].size = 0;
-	}
+void init_fbuffer() {
+    int i;
+    for ( i = 0; i < FBUFFER_MAX; i++) {
+        JPEG_fbuffer[i].size = 0;
+    }
     set_message_box(INVALID_MESSAGE);
 }
 
-void set_fbuffer(uint32_t bufnum, uint32_t pos, uint8_t *pbuf, uint32_t size)
-{
-	if( bufnum < FBUFFER_MAX) {
-		JPEG_fbuffer[bufnum].pos = pos;
-		JPEG_fbuffer[bufnum].pbuf = pbuf;
-		JPEG_fbuffer[bufnum].size = size;	// set size at last
-	}
+void set_fbuffer(uint32_t bufnum, uint32_t pos, uint8_t *pbuf, uint32_t size) {
+    if (bufnum < FBUFFER_MAX) {
+        JPEG_fbuffer[bufnum].pos = pos;
+        JPEG_fbuffer[bufnum].pbuf = pbuf;
+        JPEG_fbuffer[bufnum].size = size;               // set size at last
+    }
 }
 
 static int testBuffer(int32_t iPos, int32_t iLen) {
     int i;
     int retc = -1;
     int32_t bufPos, bufLen;
-    
-	for( i = 0; i < FBUFFER_MAX; i++) {
-		if( JPEG_fbuffer[i].size == 0 ) {
-			continue;
-		}
+
+    for ( i = 0; i < FBUFFER_MAX; i++) {
+        if (JPEG_fbuffer[i].size == 0) {
+            continue;
+        }
         bufPos = JPEG_fbuffer[i].pos;
-	    bufLen =  JPEG_fbuffer[i].size;
-		if( bufPos <= iPos && iPos + iLen <= bufPos + bufLen) {
-			retc = i;
-			break;
-		}
-	}
+        bufLen = JPEG_fbuffer[i].size;
+        if (bufPos <= iPos && iPos + iLen <= bufPos + bufLen) {
+            retc = i;
+            break;
+        }
+    }
     return retc;
 }
 
 
-static int32_t readRAM_split(JPEGFILE *pFile, uint8_t *pBuf, int32_t iLen)
-{
-	uint8_t *pFilebuf;
+static int32_t readRAM_split(JPEGFILE *pFile, uint8_t *pBuf, int32_t iLen) {
+    uint8_t *pFilebuf;
     int rc;
     int offset, iBytesRead;
-    
-    while( (rc = testBuffer(pFile->iPos, iLen)) < 0) {
+
+    while ((rc = testBuffer(pFile->iPos, iLen)) < 0) {
         set_message_box2(iLen);
         set_message_box(pFile->iPos);
     }
@@ -504,10 +497,12 @@ static int32_t readRAM_split(JPEGFILE *pFile, uint8_t *pBuf, int32_t iLen)
 } /* readRAM_split() */
 
 
-static int32_t seekMem_split(JPEGFILE *pFile, int32_t iPosition)
-{
-    if (iPosition < 0) iPosition = 0;
-    else if (iPosition >= pFile->iSize) iPosition = pFile->iSize-1;
+static int32_t seekMem_split(JPEGFILE *pFile, int32_t iPosition) {
+    if (iPosition < 0) {
+        iPosition = 0;
+    } else if (iPosition >= pFile->iSize) {
+        iPosition = pFile->iSize - 1;
+    }
     pFile->iPos = iPosition;
     return iPosition;
 } /* seekMem_split() */
@@ -541,15 +536,15 @@ static mp_obj_t jpegdec_decode_split_wait(size_t n_args, const mp_obj_t *args) {
     int result = 0;
     int res1 = INVALID_MESSAGE;
     int res2 = 0;
-    if( core1_running == 1) {   // core1 is running
+    if (core1_running == 1) {   // core1 is running
         res1 = get_message_box();
         res2 = get_message_box2();
-        if( res1 != INVALID_MESSAGE) {
+        if (res1 != INVALID_MESSAGE) {
             set_message_box(INVALID_MESSAGE);
         }
     } else if (core1_running == 2) {    // core1 done
         res2 = (int)JPEG_msg_core1;     // core1 result
-        res1 = decode_core1_epilogue();
+        res1 = core1_result;
         core1_running = 0;
         result = 1;
     } else {                            // core1 does nothing
@@ -570,15 +565,15 @@ static mp_obj_t jpegdec_decode_split_buffer(size_t n_args, const mp_obj_t *args)
     // buffer num, filepointer, buffer
     mp_buffer_info_t inbuf;
     int result = 0;
-    
+
     int bufnum = mp_obj_get_int(args[0]);
     int filepos = mp_obj_get_int(args[1]);
-    if( bufnum < FBUFFER_MAX) {
+    if (bufnum < FBUFFER_MAX) {
         mp_get_buffer_raise(args[2], &inbuf, MP_BUFFER_READ);
         set_fbuffer(bufnum, filepos, (uint8_t *)inbuf.buf, inbuf.len);
         result = 1;
     }
-    
+
     mp_obj_t res[1] = {
         mp_obj_new_int(result),
     };
@@ -596,17 +591,17 @@ static mp_obj_t jpegdec_decode_split(size_t n_args, const mp_obj_t *args) {
     mp_obj_t *tuple_data = NULL;
     size_t tuple_len = 0;
     int fileSize;
-    
+
     while (core1_decode_is_busy()) {
         tight_loop_contents();
     }
     if (core1_running == 2) {
-        result0 = decode_core1_epilogue();
+        result0 = core1_result;
         core1_running = 0;
     }
 
     init_fbuffer();
-    
+
     fileSize = mp_obj_get_int(args[0]);
     mp_get_buffer_raise(args[1], &inbuf, MP_BUFFER_READ);
     set_fbuffer(0, 0, (uint8_t *)inbuf.buf, inbuf.len);
@@ -639,7 +634,7 @@ static mp_obj_t jpegdec_decode_split(size_t n_args, const mp_obj_t *args) {
     if (n_args >= 5) {
         ioption = mp_obj_get_int(args[4]);
     }
-    
+
 
     jpeg_param_init_split(&_jpeg, fileSize, inbuf.buf, JPEGDraw);
     result = JPEGInit(&_jpeg);
@@ -648,7 +643,7 @@ static mp_obj_t jpegdec_decode_split(size_t n_args, const mp_obj_t *args) {
         _jpeg.iYOffset = ofst_y;
         _jpeg.iOptions = ioption | JPEG_USES_DMA;
         _jpeg.ucPixelType = RGB565_BIG_ENDIAN;
-        if ( f_clip ) {
+        if (f_clip) {
             JPEG_setCropArea(&_jpeg, clip_x, clip_y, clip_w, clip_h);
         }
         JPEGModeChange(0);
@@ -697,7 +692,7 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_end_obj, 0, 0, jpegdec_end);
 
 static mp_obj_t jpegdec_clear(size_t n_args, const mp_obj_t *args) {
     int drawmode = (int)JPEGGetMode();
-    if ( n_args == 1) {
+    if (n_args == 1) {
         drawmode = mp_obj_get_int(args[0]);     // mode 0:simple, 1:flip screen
     }
     JPEGClearScreen(drawmode);
