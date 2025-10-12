@@ -16,6 +16,7 @@ HMAX = 320
 screen = picocalc.display
 keyb = picocalc.keyboard
 
+crop_mode = 0
 
 def check_key():
     kc = keyb.keyCount()
@@ -74,7 +75,36 @@ class JpegFunc:
 
         jpginfo = PicoJpeg.decode_opt(buf, offset, clip, ioption)
         return jpginfo
-
+        
+        
+    @classmethod
+    def fix_crop(cls, scale, crop, jpegsize):
+        """
+          in:  crop, jpegsize (in jpeg pixel)
+          out: fixed crop value for JPEGDEC
+        """
+        jw, jh = jpegsize
+        x, y, w, h = crop
+        x1 = x + w
+        y1 = y + h
+        if x & 0xf != 0:
+            x = (x & 0xfff0) + 16
+        if y & 0xf != 0:
+            y = (y & 0xfff0) + 16
+        x1 = x1 & 0xfff0
+        y1 = y1 & 0xfff0
+        if y1 > jh - 32:        # to avoid buffer overrun
+            y1 = jh - 32
+        #if x1 > jw - 16:        # to avoid buffer overrun
+        #   x1 = jw - 16
+        w = x1 - x
+        h = y1 - y
+        cx = int(x * scale)     # cx,cw is in display pixel
+        cw = int(w * scale)
+        cy = int(y * scale)     # cy is in display pixel
+        ch = int( y1 - cy )     # ch is ???
+        return (cx, cy, cw, ch)
+ 
     @classmethod
     def calcscale(cls, buf):
 
@@ -88,6 +118,21 @@ class JpegFunc:
         w0 = w
         h0 = h
         scale = 1.0
+        if crop_mode < 0:
+            if( w > 320):
+                clp_x = int((w - 320)//2)
+                clp_w = 320
+            else:
+                clp_x = 0
+                clp_w = w
+            if( h > 320):
+                clp_y = int((h - 320)//2)
+                clp_h = 320
+            else:
+                clp_y = 0
+                clp_h = h
+            return (scale, (off_x, off_y), (clp_x, clp_y, clp_w, clp_h)) 
+           
         for fact in (4, 2, 1):
             if w > WMAX * fact or h > HMAX * fact:
                 fact = fact * 2
@@ -96,116 +141,129 @@ class JpegFunc:
                 scale = 1 / fact
                 print(f"change w={w}, h={h}, scale={scale}")
                 break
-        """
-        if w > WMAX:
-            off_x = 0
-            clp_x = int((w - WMAX) / scale) // 2
-            clp_w = int( WMAX / scale)
-        else:
-            off_x = (WMAX - w) // 2
-            clp_x = 0
-            clp_w = w0
-
-        if h > HMAX:
-            off_y = 0
-            clp_y = int((h - HMAX) / scale) //2
-            clp_h = int( HMAX / scale)
-        else:
-            off_y = (HMAX - h) //2
-            clp_y = 0
-            clp_h = h0
-        """
         clp_x = 0
         clp_y = 0
-        clp_w = int(w0 * scale)
-        clp_h = int(h0)
+        clp_w = w0
+        clp_h = h0
+
+
+        divider = 3
+        if crop_mode != 0:
+            if crop_mode < 10:
+                clp_x = w0 / divider * (crop_mode - 1)
+                clp_w = w0 / divider
+            else:
+                clp_y = h0 / divider * (crop_mode//10 - 1)
+                clp_h = h0 / divider
+            clp_x = int(clp_x)
+            clp_y = int(clp_y)
+            clp_w = int(clp_w)
+            clp_h = int(clp_h)
+        print((clp_x, clp_y, clp_w, clp_h))
+        clp_x, clp_y, clp_w, clp_h = cls.fix_crop(scale, (clp_x, clp_y, clp_w, clp_h), (w0, h0))
+        off_x = clp_x
+        off_y = clp_y
+        print((clp_x, clp_y, clp_w, clp_h))
         return (scale, (off_x, off_y), (clp_x, clp_y, clp_w, clp_h))
 
-    @classmethod
-    def showcenter(cls, buf):
-
-        off_x = off_y = 0
-        clp_x = clp_y = 0
-
-        jpginfo = PicoJpeg.getinfo(buf)
-        w = jpginfo[1]
-        h = jpginfo[2]
-        print(f"w={w}, h={h}")
-        w0 = w
-        h0 = h
-        scale = 1.0
-        if w >= WMAX * 2 or h >= HMAX * 2:
-            w = w // 2
-            h = h // 2
-            scale = 0.5
-            print(f"change w={w}, h={h}, scale={scale}")
-
-        if w > WMAX:
+        eps = 32
+        if scale <= 0.125 :
+            eps = 32
+        if crop_mode == 1:
             off_x = 0
-            clp_x = (w - WMAX) // 2
-            clp_w = WMAX
-        else:
-            off_x = (WMAX - w) // 2
             clp_x = 0
-            clp_w = w
+#            clp_w = w0 / 4 - eps
+            clp_w = w / 4 - eps
+            print("width 1/4")
 
-        if h > HMAX:
-            off_y = 0
-            clp_y = (h - HMAX) // 2
-            clp_h = HMAX
+        if crop_mode == 2:
+            off_x = w / 4
+#            clp_x = w0 / 4
+#            clp_w = w0 / 4 - eps
+            clp_x = w / 4
+            clp_w = w / 4 - eps
+            print("width 2/4")
+            
+        if crop_mode == 3:
+            off_x = w / 4 * 2
+#            clp_x = w0 / 4 * 2
+#            clp_w = w0 / 4 - eps
+            clp_x = w / 4 * 2
+            clp_w = w / 4 - eps
+            print("width 3/4")
+
+        if crop_mode == 4:
+            off_x = w / 4 * 3
+#            clp_x = w0 / 4 * 3
+#            clp_w = w0 / 4 - eps
+            clp_x = w / 4 * 3
+            clp_w = w / 4 - eps
+            print("width 4/4")
+            
+
+        if False : #scale == 0.25:
+            if crop_mode == 10:
+                off_y = 0
+                clp_y = 0
+                clp_h = h0 /4 - eps
+                print("height 1/4")
+            if crop_mode == 20:
+                off_y = h / 4
+                clp_y = h / 4
+                clp_h = h0 / 2 - clp_y - eps #h + h / 2 - eps
+                print("height 2/4")
+
+            if crop_mode == 30:
+                off_y = h / 4 * 2
+                clp_y = h / 4 * 2
+                clp_h = 3 * h0 / 4 - clp_y - eps # clp_y * 4 + h / 2 - eps
+                
+                print("height 3/4")
+
+            if crop_mode == 40:
+                off_y = h / 4 * 3
+                clp_y = h / 4 * 3
+                clp_h = h0 - clp_y -eps #clp_y * 4 + h / 2 - eps
+                print("height 4/4")
+
+            
         else:
-            off_y = (HMAX - h) // 2
-            clp_y = 0
-            clp_h = h
+            divider = 3
 
-        jpginfo = cls.decode(
-            buf,
-            offset=(off_x, off_y)
-            # , clip=(clp_x, clp_y + off_y, clp_w + off_x, clp_h + off_y)
-            ,
-            clip=(0, 0, w0, h0),
-            scale=scale,
-        )
-        rc = 0
-        if jpginfo[0] == 0:
-            rc = -1
-        return rc
+            if crop_mode == 10:
+                off_y = 0
+                clp_y = 0
+                clp_h = h0 / divider - eps
+                print(f"height 1/{divider}")
+            if crop_mode == 20:
+                off_y = h / divider
+                clp_y = h / divider
+                clp_h = 2 * h0 / divider - clp_y - eps #h + h / 2 - eps
+                print("height 2/3")
 
-    @classmethod
-    def flipdrawpage(cls):
-        if cls.drawpage == 1:
-            cls.drawpage = 2
-        else:
-            cls.drawpage = 1
+            if crop_mode == 30:
+                off_y = 2 * h / divider
+                clp_y = 2 * h / divider
+                clp_h = 3 * h0 / divider - clp_y - eps #h + h / 2 - eps
+                print("height 3/3")
 
-    @classmethod
-    def showjpeg(cls, buf):
-        if cls.decoder_running:
-            jpginfo = PicoJpeg.decode_core_wait()
-            if jpginfo[0] == 0 and jpginfo[1] != 0:
-                print(f"decode error {jpginfo}")
-        cls.buf_save = buf  # To exclude gc while docoder running
-        cls.decoder_running = True
+        off_x = int(off_x)
+        off_y = int(off_y)
+        clp_x = int(clp_x)
+        clp_y = int(clp_y)
+        clp_w = int(clp_w)
+        clp_h = int(clp_h)
+        
+        return (scale, (off_x, off_y), (clp_x, clp_y, clp_w, clp_h))
 
-        jpginfo = PicoJpeg.getinfo(buf)
-        w = jpginfo[1]
-        h = jpginfo[2]
-
-        if h > 240:
-            jpginfo = PicoJpeg.decode_core(cls.buf_save, 0, 1)  # single page
-        else:
-            jpginfo = PicoJpeg.decode_core(cls.buf_save, cls.drawpage, 1)  # flip page
-
-        cls.flipdrawpage()
-        return 0
 
     @classmethod
     def start_split(cls, fsize, buf):
         (scale, offset, clip) = cls.calcscale(buf)
         ioption = cls.get_option(scale)
         print(scale, offset, clip, ioption)
-        clip = None
-        offset = None
+        # clip = None
+        #offset = None
         jpginfo = PicoJpeg.decode_split(fsize, buf, offset, clip, ioption)
         return jpginfo[0]
 
@@ -241,7 +299,7 @@ class JpegFunc:
             buf = cls.buffers[buf_idx]
             fi.seek(newpos)
             fi.readinto(buf)
-            print(f"seek to {newpos},{newsize}, size={len(buf)}")
+            #print(f"seek to {newpos},{newsize}, size={len(buf)}")
             t_read += lap0 - time.ticks_ms()
             lap0 = time.ticks_ms()
             jpginfo = PicoJpeg.decode_split_buffer(buf_idx, newpos, buf)
@@ -298,59 +356,23 @@ class MyException(Exception):
     pass
 
 
-def run0():
-    print("Enter main")
-    screen.stopRefresh()
-    print("\x1b[35;9H")
-
-    try:
-        JpegFunc.start()
-        fdir = "/sd/"
-        flist = os.listdir(fdir)
-        for fn in flist:
-            rc = JpegFunc.single_view(fdir + fn)
-            if rc == 1:
-                time.sleep(5)
-
-        rc = JpegFunc.single_view("/gun320.jpg")
-        time.sleep(5)
-        rc = JpegFunc.single_view("/rezero-l.jpg")
-        time.sleep(5)
-        rc = JpegFunc.single_view("/rezero.jpg")
-        time.sleep(5)
-        while True:
-            rc = 0
-            for fname, fps in (
-                ("/sd/countdown.tar", 8),
-                ("/sd/sig320x8-1.tar", 8),
-                ("/sd/sig320x8-2.tar", 8),
-                ("/sd/sig240x12-1.tar", 12),
-                ("/sd/sig240x12-2.tar", 12),
-            ):
-                rc = JpegFunc.pictview(fname, fps)
-                if rc < 0:
-                    break
-                st = get_keystring()
-                if "q" in st:
-                    rc = -1
-                    break
-            if rc < 0:
-                break
-            gc.collect()
-    finally:
-        print("Leave main")
-        JpegFunc.end()
-        screen.recoverRefresh()
-
 
 def run():
     print("Enter main")
     screen.stopRefresh()
 
-    JpegFunc.start()
-    rc = JpegFunc.single_view("/sd/rezero-l.jpg")
-    time.sleep(5)
-
+    global crop_mode
+    
+    JpegFunc.start() 
+    for crop_mode in (-1,0): 
+        #rc = JpegFunc.single_view("/sd/2560x2560.jpg")
+        #rc = JpegFunc.single_view("/1280x1280.jpg")
+        rc = JpegFunc.single_view("/640x640.jpg")
+        #rc = JpegFunc.single_view("/gun320.jpg")
+        get_keystring()
+        while check_key() is False:
+            time.sleep(1)
+            
     JpegFunc.end()
     screen.recoverRefresh()
 
