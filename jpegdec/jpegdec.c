@@ -5,7 +5,7 @@
 volatile uint8_t core1_running = 0;     // 0: stop, 1: run, 2: done
 void *JPEGdummy = {readFLASH};          // to avoid compiler error
 static uint16_t disp_height, disp_width;
-static int core1_result;
+static int docode_result;
 static JPEGIMAGE _jpeg;
 static uint8_t Coremode = 0;
 
@@ -186,7 +186,7 @@ static void decode_core1_prepare(int drawmode, JPEGIMAGE *pJpeg, int iDataSize, 
 void decode_core1_main() {
     multicore_lockout_victim_init();
     core1_running = 1;
-    core1_result = DecodeJPEG(&_jpeg);
+    docode_result = DecodeJPEG(&_jpeg);
     JPEGWaitDma();
     uint8_t pageNum = JPEGGetDrawPage();
     JPEGSetViewPage(pageNum);
@@ -196,7 +196,7 @@ void decode_core1_main() {
 }
 void decode_core0_main() {
     core1_running = 1;
-    core1_result = DecodeJPEG(&_jpeg);
+    docode_result = DecodeJPEG(&_jpeg);
     JPEGWaitDma();
     uint8_t pageNum = JPEGGetDrawPage();
     JPEGSetViewPage(pageNum);
@@ -217,7 +217,7 @@ static void decode_core1_body(JPEGIMAGE *pJpeg, int core) {
         multicore_launch_core1_with_stack(decode_core1_main, core1_stack, CORE1_STACK_SIZE);
     }
 
-    // for core0 //core1_result = DecodeJPEG(&_jpeg);
+    // for core0 //docode_result = DecodeJPEG(&_jpeg);
 }
 
 
@@ -239,7 +239,7 @@ static mp_obj_t jpegdec_decode_core(size_t n_args, const mp_obj_t *args) {
         tight_loop_contents();
     }
     if (core1_running == 2) {
-        result = core1_result;
+        result = docode_result;
         core1_running = 0;
     }
 
@@ -266,6 +266,16 @@ static mp_obj_t jpegdec_decode_core(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_core_obj, 2, 3, jpegdec_decode_core);
 
+
+static mp_obj_t jpegdec_decode_core_stat(size_t n_args, const mp_obj_t *args) {
+    int result =  (int)core1_running;
+    mp_obj_t res[1] = {
+        mp_obj_new_int(result),
+    };
+    return mp_obj_new_tuple(1, res);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_core_stat_obj, 0, 0, jpegdec_decode_core_stat);
+
 static mp_obj_t jpegdec_decode_core_wait(size_t n_args, const mp_obj_t *args) {
     int result = 1;
     int res1 = 0;
@@ -290,7 +300,7 @@ static mp_obj_t jpegdec_decode_core_wait(size_t n_args, const mp_obj_t *args) {
         }
     } 
     if (core1_running == 2) {
-        result = core1_result;
+        result = docode_result;
         core1_running = 0;
     }
     int res3 = (int)core1_running;
@@ -486,6 +496,7 @@ static int32_t readRAM_split(JPEGFILE *pFile, uint8_t *pBuf, int32_t iLen) {
     while ((rc = testBuffer(pFile->iPos, iLen)) < 0) {
         set_message_box2(iLen);
         set_message_box(pFile->iPos);
+        sleep_us(10);
     }
 
     pFilebuf = JPEG_fbuffer[rc].pbuf;
@@ -527,7 +538,7 @@ static void jpeg_param_init_split(JPEGIMAGE *pJpeg, int iDataSize, uint8_t *pDat
 void decode_core1_split() {
     multicore_lockout_victim_init();
     core1_running = 1;
-    core1_result = DecodeJPEG(&_jpeg);
+    docode_result = DecodeJPEG(&_jpeg);
     JPEGWaitDma();
     core1_running = 2;
 }
@@ -544,7 +555,7 @@ static mp_obj_t jpegdec_decode_split_wait(size_t n_args, const mp_obj_t *args) {
         }
     } else if (core1_running == 2) {    // core1 done
         res2 = (int)JPEG_msg_core1;     // core1 result
-        res1 = core1_result;
+        res1 = docode_result;
         core1_running = 0;
         result = 1;
     } else {                            // core1 does nothing
@@ -553,13 +564,14 @@ static mp_obj_t jpegdec_decode_split_wait(size_t n_args, const mp_obj_t *args) {
     mp_obj_t res[3] = {
         mp_obj_new_int(result), // 0: running, 1: done
         mp_obj_new_int(res1),   // if result==0 : message_box(required filepointer)
-        mp_obj_new_int(res2)    // core1 result
+                                // if result==1 : core1 decode result
+        mp_obj_new_int(res2)    // if result==0 : message_box(required datasize)
     };
 
     return mp_obj_new_tuple(3, res);
 
 }
-static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_split_wait_obj, 0, 1, jpegdec_decode_split_wait);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_split_wait_obj, 0, 0, jpegdec_decode_split_wait);
 
 static mp_obj_t jpegdec_decode_split_buffer(size_t n_args, const mp_obj_t *args) {
     // buffer num, filepointer, buffer
@@ -596,7 +608,7 @@ static mp_obj_t jpegdec_decode_split(size_t n_args, const mp_obj_t *args) {
         tight_loop_contents();
     }
     if (core1_running == 2) {
-        result0 = core1_result;
+        result0 = docode_result;
         core1_running = 0;
     }
 
@@ -788,6 +800,7 @@ static const mp_rom_map_elem_t jpegdec_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_decode_core), MP_ROM_PTR(&jpegdec_decode_core_obj)},
     {MP_ROM_QSTR(MP_QSTR_decode_opt), MP_ROM_PTR(&jpegdec_decode_opt_obj)},
     {MP_ROM_QSTR(MP_QSTR_decode_core_wait), MP_ROM_PTR(&jpegdec_decode_core_wait_obj)},
+    {MP_ROM_QSTR(MP_QSTR_decode_core_stat), MP_ROM_PTR(&jpegdec_decode_core_stat_obj)},
     {MP_ROM_QSTR(MP_QSTR_decode_split), MP_ROM_PTR(&jpegdec_decode_split_obj)},
     {MP_ROM_QSTR(MP_QSTR_decode_split_wait), MP_ROM_PTR(&jpegdec_decode_split_wait_obj)},
     {MP_ROM_QSTR(MP_QSTR_decode_split_buffer), MP_ROM_PTR(&jpegdec_decode_split_buffer_obj)},

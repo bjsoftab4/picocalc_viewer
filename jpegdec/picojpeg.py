@@ -1,6 +1,7 @@
-""" wrapper for jpegdec """
+"""wrapper for jpegdec"""
 
 import jpegdec
+
 
 class PicoJpeg:
     @classmethod
@@ -10,13 +11,13 @@ class PicoJpeg:
     @classmethod
     def getinfo(cls, buf):
         return jpegdec.getinfo(buf)
-        
+
     @classmethod
     def decode_split(cls, fsize, buf, offset, clip, ioption):
         return jpegdec.decode_split(fsize, buf, offset, clip, ioption)
-        
+
     @classmethod
-    def decode_core_wait(cls, force = None):
+    def decode_core_wait(cls, force=None):
         if force is None:
             return jpegdec.decode_core_wait()
         else:
@@ -25,24 +26,25 @@ class PicoJpeg:
     @classmethod
     def decode_core(cls, buf, mode, core):
         return jpegdec.decode_core(buf, mode, core)
-        
+
     @classmethod
     def clear(cls):
         return jpegdec.clear()
-        
+
     @classmethod
     def decode_split_wait(cls):
         return jpegdec.decode_split_wait()
-        
+
     @classmethod
     def decode_split_buffer(cls, bufnum, newpos, buf):
         return jpegdec.decode_split_buffer(bufnum, newpos, buf)
-        
+
     @classmethod
-    def start(cls, mode):
+    def start(cls, mode = None):
+        if mode is None:
+            mode = 0
         return jpegdec.start(mode)
-        
+
     @classmethod
     def end(cls):
         return jpegdec.end()
-
