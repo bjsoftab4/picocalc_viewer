@@ -435,6 +435,7 @@ volatile struct st_filebuffer {
 
 volatile uint32_t core_message_box;
 volatile uint32_t core_message_box2;
+volatile uint32_t core_message_box3;
 
 uint32_t get_message_box() {
     return core_message_box;
@@ -452,6 +453,15 @@ void set_message_box2(uint32_t msg) {
     core_message_box2 = msg;
 }
 
+uint32_t get_message_box3() {
+    return core_message_box3;
+}
+
+void set_message_box3(uint32_t msg) {
+    core_message_box3 = msg;
+}
+
+
 void init_fbuffer() {
     int i;
     for ( i = 0; i < FBUFFER_MAX; i++) {
@@ -467,7 +477,7 @@ void set_fbuffer(uint32_t bufnum, uint32_t pos, uint8_t *pbuf, uint32_t size) {
         JPEG_fbuffer[bufnum].size = size;               // set size at last
     }
 }
-
+#if 0
 static int testBuffer(int32_t iPos, int32_t iLen) {
     int i;
     int retc = -1;
@@ -487,16 +497,116 @@ static int testBuffer(int32_t iPos, int32_t iLen) {
     return retc;
 }
 
+// buffer     |bufpos         |+bufLen             |
+// request        |iPos       |+iLen                    return i
+// request        |iPos          |+iLen                 return 0x100 + i
+#endif
+static int testAndSetBuffer(int32_t *p_iPos, int32_t *p_iLen, uint8_t *dstBuf) {
+    int i, j;
+    int retc = -1;
+    int32_t bufPos, bufLen;
+    int32_t bufPos2, bufLen2;
 
+    int32_t iPos = *p_iPos, iLen = *p_iLen;
+
+    for ( i = 0; i < FBUFFER_MAX; i++) {
+        if (JPEG_fbuffer[i].size == 0) {
+            continue;
+        }
+        bufPos = JPEG_fbuffer[i].pos;
+        bufLen = JPEG_fbuffer[i].size;
+        if (bufPos <= iPos) {
+            if (iPos + iLen <= bufPos + bufLen) {
+                memcpy(dstBuf, JPEG_fbuffer[i].pbuf + (iPos - bufPos), iLen);
+                iPos += iLen;
+                iLen = 0;
+                *p_iPos = iPos;
+                *p_iLen = iLen;
+                retc = i;                // normal end
+                return retc;
+            }
+            if (iPos < bufPos + bufLen) {   // found 1st part
+                int32_t size_1st = bufPos + bufLen - iPos;
+                memcpy(dstBuf, JPEG_fbuffer[i].pbuf + (iPos - bufPos), size_1st);
+                dstBuf += size_1st;
+                iPos += size_1st;
+                iLen -= size_1st;
+                for ( j = 0; j < FBUFFER_MAX; j++) {    // search 2nd part
+                    if (JPEG_fbuffer[j].size == 0) {
+                        continue;
+                    }
+                    if (i == j) {
+                        continue;
+                    }
+                    bufPos2 = JPEG_fbuffer[j].pos;
+                    bufLen2 = JPEG_fbuffer[j].size;
+                    if (bufPos2 <= iPos) {
+                        if (iPos + iLen <= bufPos2 + bufLen2) {  // found 2nd part
+                            memcpy(dstBuf, JPEG_fbuffer[j].pbuf + (iPos - bufPos2), iLen);
+                            iPos += iLen;
+                            iLen = 0;
+                            *p_iPos = iPos;
+                            *p_iLen = iLen;
+                            retc = 0x100 | i; // i is empty and end
+                            return retc;
+                        }
+                    }
+                }
+                // 2nd part is not found
+                *p_iPos = iPos;             // set new iPos, iLen
+                *p_iLen = iLen;
+                retc = 0x200 | i;           // i is empty and need reading
+                return retc;
+            }
+        }
+    }
+    return retc;
+}
+
+static int32_t readRAM_split(JPEGFILE *pFile, uint8_t *pBuf, int32_t iLen) {
+    int rc;
+    int iBytesRead;
+    int32_t iPos = pFile->iPos;
+    int32_t iLen_sav = iLen;
+    
+    do {
+        rc = testAndSetBuffer(&iPos, &iLen, pBuf);
+        if (rc < 0){
+            set_message_box3(-1);
+            set_message_box2(iLen);
+            set_message_box(iPos);
+            sleep_ms(0);
+            continue;
+        }
+        if( (rc & 0x200) != 0) {          // copied only 1st part
+            set_message_box3(rc);
+            set_message_box2(iLen);     // request new buffer
+            set_message_box(iPos);
+            sleep_ms(0);
+            rc = -1;
+            continue;
+        }
+    } while (rc < 0);
+
+    // return used buffer, or inform buffer empty
+    set_message_box3(rc);
+    set_message_box2(0);         // inform next iPos
+    set_message_box(iPos);
+    iBytesRead = iLen_sav;
+    pFile->iPos += iLen_sav;
+    return iBytesRead;
+} /* readRAM_split() */
+
+#if 0
 static int32_t readRAM_split(JPEGFILE *pFile, uint8_t *pBuf, int32_t iLen) {
     uint8_t *pFilebuf;
     int rc;
     int offset, iBytesRead;
 
+    set_message_box2(iLen);
+    set_message_box(pFile->iPos);
     while ((rc = testBuffer(pFile->iPos, iLen)) < 0) {
-        set_message_box2(iLen);
-        set_message_box(pFile->iPos);
-        sleep_us(10);
+        sleep_ms(0);
     }
 
     pFilebuf = JPEG_fbuffer[rc].pbuf;
@@ -506,7 +616,7 @@ static int32_t readRAM_split(JPEGFILE *pFile, uint8_t *pBuf, int32_t iLen) {
     pFile->iPos += iBytesRead;
     return iBytesRead;
 } /* readRAM_split() */
-
+#endif
 
 static int32_t seekMem_split(JPEGFILE *pFile, int32_t iPosition) {
     if (iPosition < 0) {
@@ -547,9 +657,11 @@ static mp_obj_t jpegdec_decode_split_wait(size_t n_args, const mp_obj_t *args) {
     int result = 0;
     int res1 = INVALID_MESSAGE;
     int res2 = 0;
+    int res3 = 0;
     if (core1_running == 1) {   // core1 is running
         res1 = get_message_box();
         res2 = get_message_box2();
+        res3 = get_message_box3();
         if (res1 != INVALID_MESSAGE) {
             set_message_box(INVALID_MESSAGE);
         }
@@ -561,14 +673,15 @@ static mp_obj_t jpegdec_decode_split_wait(size_t n_args, const mp_obj_t *args) {
     } else {                            // core1 does nothing
         result = 1;
     }
-    mp_obj_t res[3] = {
+    mp_obj_t res[4] = {
         mp_obj_new_int(result), // 0: running, 1: done
         mp_obj_new_int(res1),   // if result==0 : message_box(required filepointer)
                                 // if result==1 : core1 decode result
-        mp_obj_new_int(res2)    // if result==0 : message_box(required datasize)
+        mp_obj_new_int(res2),    // if result==0 : message_box(required datasize)
+        mp_obj_new_int(res3),    // if result==0 : message_box(index information)
     };
 
-    return mp_obj_new_tuple(3, res);
+    return mp_obj_new_tuple(4, res);
 
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_split_wait_obj, 0, 0, jpegdec_decode_split_wait);
