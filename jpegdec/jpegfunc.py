@@ -15,6 +15,7 @@ def checkKey():
     return True
 
 class JpegFunc:
+    debug = const(False)
     JPEG_SCALE_HALF = const(2)
     JPEG_SCALE_QUARTER = const(4)
     JPEG_SCALE_EIGHTH = const(8)
@@ -281,18 +282,22 @@ class JpegFunc:
         return jpginfo[0]
 
     @classmethod
+    def read_into_buf(cls, fi, buf):
+        lap = time.ticks_ms()
+        fi.readinto(buf)
+        cls.time_read += time.ticks_ms() - lap
+
+    @classmethod
     def decode_split(cls, outfn, fi, fsize):
         rc = 0
         last = time.ticks_ms()
-        t_read = 0
+        cls.time_read = 0
         t_decode = 0
 
         buf_idx = 0
         buf = cls.buffers[buf_idx]
         cls.buffers_pos[buf_idx] = 0
-        lap0 = time.ticks_ms()
-        fi.readinto(buf)
-        t_read += lap0 - time.ticks_ms()
+        cls.read_into_buf(fi, buf)
         cls.decoder_running = True
         rc = cls.start_split(fsize, buf)
         
@@ -300,32 +305,33 @@ class JpegFunc:
         pos2 = BUFFERSIZE
         cls.buffers_pos[1] = pos2
         fi.seek(pos2)
-        lap0 = time.ticks_ms()
-        fi.readinto(buf2)
-        t_read += lap0 - time.ticks_ms()
-        #print(f"preload seek to {pos2}, write buf{1}")
-        t_read += lap0 - time.ticks_ms()
+        cls.read_into_buf(fi, buf2)
+        if cls.debug : print(f"preload seek to {pos2}, write buf{1}")
         jpginfo = PicoJpeg.decode_split_buffer(1, pos2, buf2)
         
         
         newpos = -1
-        lap0 = time.ticks_ms()
         while True:
-            # Todo ここで先読みしておきたいが、必要になるまで通知が来ないので、先読みできない
-            retc = PicoJpeg.decode_split_wait()
-            if retc[0] == 0:  # running
-                if retc[1] < 0:  # fpos is not set
-                    continue
-                newpos = retc[1]
-                newsize = retc[2]
-                idxinfo = retc[3]
-            else:  # Done
-                print("retc:",retc)
+            lap0 = time.ticks_ms()
+            while True:
+                retc = PicoJpeg.decode_split_wait()
+                if retc[0] == 0:  # running
+                    if retc[1] < 0:  # fpos is not set
+                        continue
+                    newpos = retc[1]
+                    newsize = retc[2]
+                    idxinfo = retc[3]
+                    break
+                else:  # Done
+                    print("retc:",retc)
+                    break
+            if retc[0] != 0:  # Done
                 break
-            #print(f"split_wait {newpos},{newsize} idxinfo={idxinfo}")
-            
+            if cls.debug : print(f"split_wait {newpos},{newsize} idxinfo={idxinfo}")
+            t_decode += time.ticks_ms() - lap0 
+
             idx, freeidx = cls.test_buffer(newpos, newsize)
-            #print(f"readRAM {newpos},{newsize}  idx={idx},freebufbit={freeidx}")
+            if cls.debug : print(f"readRAM {newpos},{newsize}  idx={idx},freebufbit={freeidx}")
             if freeidx != 0:
                 for i in range(BUFFERNUM):
                     if freeidx & (1<<i) != 0:
@@ -337,10 +343,8 @@ class JpegFunc:
                         pos2 = newpos
                         cls.buffers_pos[i] = pos2
                         fi.seek(pos2)
-                        lap0 = time.ticks_ms()
-                        fi.readinto(buf2)
-                        #print(f"preload seek to {pos2}")
-                        t_read += lap0 - time.ticks_ms()
+                        cls.read_into_buf(fi, buf2)
+                        if cls.debug : print(f"preload seek to {pos2}")
                         jpginfo = PicoJpeg.decode_split_buffer(i, pos2, buf2)
                 continue
 
@@ -349,19 +353,14 @@ class JpegFunc:
                 continue
             else:           # all buffers are empty
                 buf_idx = 0    
-            t_decode += lap0 - time.ticks_ms()
             buf = cls.buffers[buf_idx]
             cls.buffers_pos[buf_idx] = newpos
             fi.seek(newpos)
-            lap0 = time.ticks_ms()
-            fi.readinto(buf)
+            cls.read_into_buf(fi, buf)
             print(f"seek to {newpos},{newsize}, size={len(buf)}")
-            t_read += lap0 - time.ticks_ms()
-            lap0 = time.ticks_ms()
             jpginfo = PicoJpeg.decode_split_buffer(buf_idx, newpos, buf)
-            # print(jpginfo)
+            if cls.debug :  print(jpginfo)
             
-            lap0 = time.ticks_ms()
             buf_idx += 1
             if buf_idx >= BUFFERNUM:
                 buf_idx = 0
@@ -369,14 +368,13 @@ class JpegFunc:
             newpos += BUFFERSIZE
             cls.buffers_pos[buf_idx] = newpos
             fi.seek(newpos)
-            fi.readinto(buf)
+            cls.read_into_buf(fi, buf)
             print(f"preload seek to {newpos},{newsize}, size={len(buf)}")
-            t_read += lap0 - time.ticks_ms()
             jpginfo = PicoJpeg.decode_split_buffer(buf_idx, newpos, buf)
             
         n_time = time.ticks_ms()
         dif = n_time - last
-        print(f"time: read={t_read}, decode={t_decode}, total={dif}")
+        print(f"time: read={cls.time_read}, decode={t_decode}, total={dif}")
         cls.decoder_running = False
         return rc
 
