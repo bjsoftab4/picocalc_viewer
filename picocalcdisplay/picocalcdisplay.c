@@ -304,6 +304,7 @@ static mp_obj_t pd_init(mp_obj_t fb_obj, mp_obj_t color_type, mp_obj_t autoR){
     //sleep_ms(100);
     //pColorUpdate(frameBuff,DISPLAY_HEIGHT*DISPLAY_WIDTH, LUT);
     //sleep_ms(10);
+    JPEG_override = 0;      //JPEGDEC
     if (autoUpdate==true){
       multicore_reset_core1();
       multicore_launch_core1_with_stack(core1_main, core1_stack, CORE1_STACK_SIZE);
