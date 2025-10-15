@@ -117,11 +117,7 @@ static mp_obj_t jpegdec_decodex2(size_t n_args, const mp_obj_t *args) {
     jpeg_param_init(&_jpeg, iDataSize, pData, JPEGDrawx2);
     result = JPEGInit(&_jpeg);
     if (result == 1) {
-        _jpeg.iXOffset = 0;
-        _jpeg.iYOffset = 0;
-        _jpeg.iOptions = 0;
         _jpeg.iOptions = JPEG_USES_DMA;
-        _jpeg.ucPixelType = RGB565_BIG_ENDIAN;
         JPEG_setCropArea(&_jpeg, 0, 0, disp_width / 2, disp_height / 2);
         result = DecodeJPEG(&_jpeg);
     }
@@ -158,29 +154,21 @@ int core1_decode_is_busy() {
 }
 
 
-static void decode_core1_prepare(int drawmode, JPEGIMAGE *pJpeg, int iDataSize, uint8_t *pData, JPEG_DRAW_CALLBACK func) {
+static int decode_core1_prepare(int drawmode, JPEGIMAGE *pJpeg, int iDataSize, uint8_t *pData, JPEG_DRAW_CALLBACK func) {
     int result;
     jpeg_param_init(pJpeg, iDataSize, pData, func);
     result = JPEGInit(&_jpeg);
     if (result == 1) {
-        _jpeg.iXOffset = 0;
-        _jpeg.iYOffset = 0;
         _jpeg.iOptions = JPEG_USES_DMA;
-        _jpeg.ucPixelType = RGB565_BIG_ENDIAN;
         JPEG_setCropArea(&_jpeg, 0, 0, disp_width, disp_height);
         if (drawmode == 0) {
             JPEGModeChange(0);
         } else if (drawmode == 1 || drawmode == 2) {
             JPEGModeChange(1);
             JPEGSetDrawPage(drawmode);
-//			uint8_t pageNum = JPEGGetViewPage();
-//			if( pageNum == 0 || pageNum == 2) {	// not initialized or page 2
-//				JPEGSetDrawPage(1);
-//			} else {
-//				JPEGSetDrawPage(2);
-//			}
         }
     }
+    return result;
 }
 
 void decode_core1_main() {
@@ -231,8 +219,20 @@ static mp_obj_t jpegdec_decode_core(size_t n_args, const mp_obj_t *args) {
 
     int drawmode = mp_obj_get_int(args[1]);     // mode 0:simple, 1:draw page1, 2:draw page2
     int run_core = 0;
-    if (n_args == 3) {
+    if (n_args >= 3) {
         run_core = mp_obj_get_int(args[2]);             // mode 0:single core, 1:core1
+    }
+    int ofst_x = 0, ofst_y = 0;
+    mp_obj_t *tuple_data = NULL;
+    size_t tuple_len = 0;
+    if (n_args >= 4 ) {
+        if (args[3] != mp_const_none)  {
+            mp_obj_tuple_get(args[3], &tuple_len, &tuple_data);
+            if (tuple_len >= 2) {
+                ofst_x = mp_obj_get_int(tuple_data[0]);
+                ofst_y = mp_obj_get_int(tuple_data[1]);
+            }
+        }
     }
     Coremode = (uint8_t)(run_core);
     while (core1_decode_is_busy()) {
@@ -243,14 +243,11 @@ static mp_obj_t jpegdec_decode_core(size_t n_args, const mp_obj_t *args) {
         core1_running = 0;
     }
 
-    decode_core1_prepare(drawmode, &_jpeg, iDataSize, pData, JPEGDraw);
-    decode_core1_body(&_jpeg, run_core);
-    result = 1;
-    if (run_core == 0) {
-        result = 1;
-    }
-    if (run_core == 1) {
-        result = 1;
+    result = decode_core1_prepare(drawmode, &_jpeg, iDataSize, pData, JPEGDraw);
+    if(result == 1) {
+        _jpeg.iXOffset = ofst_x;
+        _jpeg.iYOffset = ofst_y;
+        decode_core1_body(&_jpeg, run_core);
     }
 
     mp_obj_t res[3] = {
@@ -264,7 +261,7 @@ static mp_obj_t jpegdec_decode_core(size_t n_args, const mp_obj_t *args) {
     // return mp_obj_new_int(result);
 
 }
-static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_core_obj, 2, 3, jpegdec_decode_core);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_core_obj, 2, 4, jpegdec_decode_core);
 
 
 static mp_obj_t jpegdec_decode_core_stat(size_t n_args, const mp_obj_t *args) {
@@ -315,6 +312,7 @@ static mp_obj_t jpegdec_decode_core_wait(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_core_wait_obj, 0, 1, jpegdec_decode_core_wait);
 
+
 static mp_obj_t jpegdec_decode(size_t n_args, const mp_obj_t *args) {
     int result;
     mp_buffer_info_t inbuf;
@@ -324,34 +322,14 @@ static mp_obj_t jpegdec_decode(size_t n_args, const mp_obj_t *args) {
     uint8_t *pData = (uint8_t *)inbuf.buf;
 
     int drawmode = mp_obj_get_int(args[1]);     // mode 0:simple, 1:flip screen
-
-    jpeg_param_init(&_jpeg, iDataSize, pData, JPEGDraw);
-    result = JPEGInit(&_jpeg);
-    if (result == 1) {
-        _jpeg.iXOffset = 0;
-        _jpeg.iYOffset = 0;
-        _jpeg.iOptions = JPEG_USES_DMA;
-        _jpeg.ucPixelType = RGB565_BIG_ENDIAN;
-        JPEG_setCropArea(&_jpeg, 0, 0, disp_width, disp_height);
-        if (drawmode == 0) {
-            JPEGModeChange(0);
-            result = DecodeJPEG(&_jpeg);
-//			JPEGModeEnd();
-        } else if (drawmode == 1) {
-            JPEGModeChange(1);
-            uint8_t pageNum = JPEGGetViewPage();
-            if (pageNum == 0 || pageNum == 2) {                 // not initialized or page 2
-                JPEGSetDrawPage(1);
-                result = DecodeJPEG(&_jpeg);
-                JPEGSetViewPage(1);
-            } else {
-                JPEGSetDrawPage(2);
-                result = DecodeJPEG(&_jpeg);
-                JPEGSetViewPage(2);
-            }
-//			JPEGModeEnd();
-        }
+    result = decode_core1_prepare(drawmode, &_jpeg, iDataSize, pData, JPEGDraw);
+    if(result == 1) {
+        result = DecodeJPEG(&_jpeg);
+        JPEGWaitDma();
+        uint8_t pageNum = JPEGGetDrawPage();
+        JPEGSetViewPage(pageNum);
     }
+
     mp_obj_t res[3] = {
         mp_obj_new_int(result),
         mp_obj_new_int(_jpeg.iWidth),
@@ -405,7 +383,6 @@ static mp_obj_t jpegdec_decode_opt(size_t n_args, const mp_obj_t *args) {
         _jpeg.iXOffset = ofst_x;
         _jpeg.iYOffset = ofst_y;
         _jpeg.iOptions = ioption | JPEG_USES_DMA;
-        _jpeg.ucPixelType = RGB565_BIG_ENDIAN;
         JPEG_setCropArea(&_jpeg, clip_x, clip_y, clip_w, clip_h);
         result = DecodeJPEG(&_jpeg);
         JPEGWaitDma();
@@ -478,36 +455,18 @@ void set_fbuffer(uint32_t bufnum, uint32_t pos, uint8_t *pbuf, uint32_t size) {
     }
 }
 #if 0
-static int testBuffer(int32_t iPos, int32_t iLen) {
+// buffer     |bufpos         |+bufLen             |
+// request        |iPos       |+iLen                    return i
+// request        |iPos          |+iLen                 return 0x200 + i
+#endif
+static int testAndSetBuffer(int32_t *p_iPos, int32_t *p_iLen, uint8_t **p_dstBuf) {
     int i;
     int retc = -1;
     int32_t bufPos, bufLen;
-
-    for ( i = 0; i < FBUFFER_MAX; i++) {
-        if (JPEG_fbuffer[i].size == 0) {
-            continue;
-        }
-        bufPos = JPEG_fbuffer[i].pos;
-        bufLen = JPEG_fbuffer[i].size;
-        if (bufPos <= iPos && iPos + iLen <= bufPos + bufLen) {
-            retc = i;
-            break;
-        }
-    }
-    return retc;
-}
-
-// buffer     |bufpos         |+bufLen             |
-// request        |iPos       |+iLen                    return i
-// request        |iPos          |+iLen                 return 0x100 + i
-#endif
-static int testAndSetBuffer(int32_t *p_iPos, int32_t *p_iLen, uint8_t *dstBuf) {
-    int i, j;
-    int retc = -1;
-    int32_t bufPos, bufLen;
-    int32_t bufPos2, bufLen2;
+    //int32_t bufPos2, bufLen2;
 
     int32_t iPos = *p_iPos, iLen = *p_iLen;
+    uint8_t *dstBuf = *p_dstBuf;
 
     for ( i = 0; i < FBUFFER_MAX; i++) {
         if (JPEG_fbuffer[i].size == 0) {
@@ -518,6 +477,7 @@ static int testAndSetBuffer(int32_t *p_iPos, int32_t *p_iLen, uint8_t *dstBuf) {
         if (bufPos <= iPos) {
             if (iPos + iLen <= bufPos + bufLen) {
                 memcpy(dstBuf, JPEG_fbuffer[i].pbuf + (iPos - bufPos), iLen);
+                *p_dstBuf += iLen;
                 iPos += iLen;
                 iLen = 0;
                 *p_iPos = iPos;
@@ -531,28 +491,8 @@ static int testAndSetBuffer(int32_t *p_iPos, int32_t *p_iLen, uint8_t *dstBuf) {
                 dstBuf += size_1st;
                 iPos += size_1st;
                 iLen -= size_1st;
-                for ( j = 0; j < FBUFFER_MAX; j++) {    // search 2nd part
-                    if (JPEG_fbuffer[j].size == 0) {
-                        continue;
-                    }
-                    if (i == j) {
-                        continue;
-                    }
-                    bufPos2 = JPEG_fbuffer[j].pos;
-                    bufLen2 = JPEG_fbuffer[j].size;
-                    if (bufPos2 <= iPos) {
-                        if (iPos + iLen <= bufPos2 + bufLen2) {  // found 2nd part
-                            memcpy(dstBuf, JPEG_fbuffer[j].pbuf + (iPos - bufPos2), iLen);
-                            iPos += iLen;
-                            iLen = 0;
-                            *p_iPos = iPos;
-                            *p_iLen = iLen;
-                            retc = 0x100 | i; // i is empty and end
-                            return retc;
-                        }
-                    }
-                }
-                // 2nd part is not found
+                JPEG_fbuffer[i].size = 0;       // buffer i is empty
+                *p_dstBuf = dstBuf;
                 *p_iPos = iPos;             // set new iPos, iLen
                 *p_iLen = iLen;
                 retc = 0x200 | i;           // i is empty and need reading
@@ -570,7 +510,7 @@ static int32_t readRAM_split(JPEGFILE *pFile, uint8_t *pBuf, int32_t iLen) {
     int32_t iLen_sav = iLen;
     
     do {
-        rc = testAndSetBuffer(&iPos, &iLen, pBuf);
+        rc = testAndSetBuffer(&iPos, &iLen, &pBuf);
         if (rc < 0){
             set_message_box3(-1);
             set_message_box2(iLen);
@@ -629,20 +569,9 @@ static int32_t seekMem_split(JPEGFILE *pFile, int32_t iPosition) {
 } /* seekMem_split() */
 
 static void jpeg_param_init_split(JPEGIMAGE *pJpeg, int iDataSize, uint8_t *pData, JPEG_DRAW_CALLBACK func) {
-    JPEGGetDisp(&disp_width, &disp_height);
-    memset((void *)pJpeg, 0, sizeof(JPEGIMAGE));
-    pJpeg->ucMemType = JPEG_MEM_RAM;
+    jpeg_param_init(pJpeg, iDataSize, pData, func);
     pJpeg->pfnRead = readRAM_split;
     pJpeg->pfnSeek = seekMem_split;
-    pJpeg->pfnDraw = func;
-    pJpeg->pfnOpen = NULL;
-    pJpeg->pfnClose = NULL;
-    pJpeg->pUser = NULL;
-    pJpeg->iError = 1111;
-    pJpeg->JPEGFile.iSize = iDataSize;
-    pJpeg->JPEGFile.pData = pData;
-    pJpeg->ucPixelType = RGB565_BIG_ENDIAN;
-    pJpeg->iMaxMCUs = 1000; // set to an unnaturally high value to start
 }
 
 void decode_core1_split() {
@@ -767,7 +696,6 @@ static mp_obj_t jpegdec_decode_split(size_t n_args, const mp_obj_t *args) {
         _jpeg.iXOffset = ofst_x;
         _jpeg.iYOffset = ofst_y;
         _jpeg.iOptions = ioption | JPEG_USES_DMA;
-        _jpeg.ucPixelType = RGB565_BIG_ENDIAN;
         if (f_clip) {
             JPEG_setCropArea(&_jpeg, clip_x, clip_y, clip_w, clip_h);
         }
@@ -793,9 +721,10 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(jpegdec_decode_split_obj, 2, 5, jpegd
 
 static mp_obj_t jpegdec_start(size_t n_args, const mp_obj_t *args) {
     int drawmode = mp_obj_get_int(args[0]);     // mode 0:simple, 1:flip screen
+    uint8_t old_mode = JPEGGetMode();
     JPEGModeStart(drawmode);
 
-    return mp_obj_new_int((int)&_jpeg);
+    return mp_obj_new_int((int)old_mode);
 
     // if( result == 0) result = _jpeg.iError;
     // return mp_obj_new_int(result);

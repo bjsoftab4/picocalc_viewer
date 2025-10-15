@@ -1,9 +1,18 @@
-from picojpeg import PicoJpeg
 import io
 import time
 
+import picocalc
+from picojpeg import PicoJpeg
+
 WMAX=320
 HMAX=320
+keyb = picocalc.keyboard
+
+def checkKey():
+    kc = keyb.keyCount()
+    if kc == 0:
+        return False
+    return True
 
 class JpegFunc:
     JPEG_SCALE_HALF = const(2)
@@ -286,7 +295,7 @@ class JpegFunc:
         t_read += lap0 - time.ticks_ms()
         cls.decoder_running = True
         rc = cls.start_split(fsize, buf)
-
+        
         buf2 = cls.buffers[1]
         pos2 = BUFFERSIZE
         cls.buffers_pos[1] = pos2
@@ -294,9 +303,10 @@ class JpegFunc:
         lap0 = time.ticks_ms()
         fi.readinto(buf2)
         t_read += lap0 - time.ticks_ms()
-        print(f"preload seek to {pos2}")
+        #print(f"preload seek to {pos2}, write buf{1}")
         t_read += lap0 - time.ticks_ms()
         jpginfo = PicoJpeg.decode_split_buffer(1, pos2, buf2)
+        
         
         newpos = -1
         lap0 = time.ticks_ms()
@@ -310,31 +320,32 @@ class JpegFunc:
                 newsize = retc[2]
                 idxinfo = retc[3]
             else:  # Done
+                print("retc:",retc)
                 break
-            print(f"split_wait {newpos},{newsize} rc={idxinfo}")
-            if idxinfo >= 0 and idxinfo < BUFFERNUM:
-                continue
+            #print(f"split_wait {newpos},{newsize} idxinfo={idxinfo}")
             
             idx, freeidx = cls.test_buffer(newpos, newsize)
-            print(f"readRAM {newpos},{newsize}  idx={idx},freeidx={freeidx}")
+            #print(f"readRAM {newpos},{newsize}  idx={idx},freebufbit={freeidx}")
             if freeidx != 0:
                 for i in range(BUFFERNUM):
                     if freeidx & (1<<i) != 0:
-                        print("use idx", i)
+                        #print(f"fill buffer[{i}]")
                         buf2 = cls.buffers[i]
+                        for j in range(BUFFERNUM):              # scan all buffer
+                            if newpos < cls.buffers_pos[j] + BUFFERSIZE :
+                                newpos = cls.buffers_pos[j]+ BUFFERSIZE      # newpos is largest addr
                         pos2 = newpos
-                        newpos += BUFFERSIZE
                         cls.buffers_pos[i] = pos2
                         fi.seek(pos2)
                         lap0 = time.ticks_ms()
                         fi.readinto(buf2)
-                        print(f"preload seek to {pos2}")
+                        #print(f"preload seek to {pos2}")
                         t_read += lap0 - time.ticks_ms()
                         jpginfo = PicoJpeg.decode_split_buffer(i, pos2, buf2)
                 continue
 
             if idx != -1:   # requested buffer is not empty
-                print("using buf", idx)
+                #print("using buf", idx)
                 continue
             else:           # all buffers are empty
                 buf_idx = 0    
@@ -355,7 +366,7 @@ class JpegFunc:
             if buf_idx >= BUFFERNUM:
                 buf_idx = 0
             buf = cls.buffers[buf_idx]
-            newpos += BUFFERSIZE - 2000
+            newpos += BUFFERSIZE
             cls.buffers_pos[buf_idx] = newpos
             fi.seek(newpos)
             fi.readinto(buf)
@@ -483,7 +494,7 @@ class JpegFunc:
             cls.drawpage = 1
 
     @classmethod
-    def showjpeg(cls, buf):
+    def showjpeg(cls, buf, center=False):
         if cls.decoder_running:
             jpginfo = PicoJpeg.decode_core_wait()
             if jpginfo[0] == 0 and jpginfo[1] != 0:
@@ -494,54 +505,70 @@ class JpegFunc:
         jpginfo = PicoJpeg.getinfo(buf)
         w = jpginfo[1]
         h = jpginfo[2]
-
+        offset = None
         if h > 240:
-            jpginfo = PicoJpeg.decode_core(cls.buf_save, 0, 1)  # single page
+            if center :
+                offset = ((WMAX - w) // 2, (HMAX - h) // 2)
+            jpginfo = PicoJpeg.decode_core(cls.buf_save, 0, 1, offset)  # single page
         else:
-            jpginfo = PicoJpeg.decode_core(cls.buf_save, cls.drawpage, 1)  # flip page
+            if center :
+                offset = ((WMAX - w) // 2, (240 - h) // 2)
+            jpginfo = PicoJpeg.decode_core(cls.buf_save, cls.drawpage, 1, offset)  # flip page
 
         cls.flipdrawpage()
         return 0
 
+        
     @classmethod
-    def play(cls, outfn, fi, fps):
+    def play_movie(cls, outfn, fps):
+        print(outfn)
+        if not outfn.endswith('.tar'):
+            if outfn.endswith((".jpg",".jpeg")):
+                rc = cls.play_picture(outfn, fps)
+                return rc
+            return -1
+        
+        try:
+            fi = io.open(outfn, mode='rb')
+        except :
+            return -1
+        rc = cls.extract_tar(fi, fps)
+        fi.close()
+        return rc
+ 
+    @classmethod
+    def extract_tar(cls, fi, fps):
         global keyb
         PicoJpeg.clear()
         waitms=int(1000/fps)
         rc = 0
+        headbuf = bytearray(512)
         for i in range(3600):
             last = time.ticks_ms()
-            if outfn.endswith('.tar'):
-                headbuf = fi.read(512)              # read tar header
-                if len(headbuf) != 512:
-                    rc = 0
-                    break
-                fn=headbuf[0:100].rstrip(b"\0").decode()
-                if len(fn) == 0:
-                    rc = 0
-                    break  # EOF
-                sz = int(headbuf[0x7c:0x87].decode(),8)
-                if (sz % 512) != 0:
-                  sz += 512 - sz % 512
-                buf = fi.read(sz)
-                if len(buf) != sz:
-                    rc = 0
-                    break  # EOF or bad data
-                if fn.endswith((".jpg",".jpeg")) is False:
-                    continue
-            elif outfn.endswith((".jpg",".jpeg")):
-                buf = fi.read()
-                if len(buf) == 0:
-                    rc = 0
-                    break  # EOF or bad data
-            else:
+            rd = fi.readinto(headbuf)  # read tar header
+            if rd != 512:
                 rc = 0
                 break
+            fn=headbuf[0:100].rstrip(b"\0").decode()
+            if len(fn) == 0:
+                rc = 0
+                break  # EOF
+            sz = int(headbuf[0x7c:0x87].decode(),8)
+            if (sz % 512) != 0:
+              sz += 512 - sz % 512
+
+            if fn.endswith((".jpg",".jpeg")) is False:
+                fi.seek(sz, 1)      # Do not read, skip
+                continue
+            buf = fi.read(sz)
+            if len(buf) != sz:
+                rc = 0
+                break  # EOF or bad data
             
-            #if checkKey():  
-            #    break
+            if checkKey():  
+                break
             lap1 = time.ticks_ms()
-            rc = cls.showjpeg(buf)
+            rc = cls.showjpeg(buf, True)
             # rc = cls.showcenter(buf)
             
             n_time = time.ticks_ms()
@@ -559,12 +586,6 @@ class JpegFunc:
 
     @classmethod
     def pictview(cls, outfn, fps):
-        print(outfn)
-        try:
-            fi = io.open(outfn, mode='rb')
-        except :
-            return -1
-        rc = cls.play(outfn, fi, fps)
-        fi.close()
+        rc = cls.play_movie(outfn, fps)
         return rc
  

@@ -40,50 +40,6 @@ class MyException(Exception):
     pass
 
 
-def run0():
-    print("Enter main")
-    screen.stopRefresh()
-    print("\x1b[35;9H")
-
-    try:
-        JpegFunc.start()
-        fdir = "/sd/"
-        flist = os.listdir(fdir)
-        for fn in flist:
-            rc = JpegFunc.single_view(fdir + fn)
-            if rc == 1:
-                time.sleep(5)
-
-        rc = JpegFunc.single_view("/gun320.jpg")
-        time.sleep(5)
-        rc = JpegFunc.single_view("/rezero-l.jpg")
-        time.sleep(5)
-        rc = JpegFunc.single_view("/rezero.jpg")
-        time.sleep(5)
-        while True:
-            rc = 0
-            for fname, fps in (
-                ("/sd/countdown.tar", 8),
-                ("/sd/sig320x8-1.tar", 8),
-                ("/sd/sig320x8-2.tar", 8),
-                ("/sd/sig240x12-1.tar", 12),
-                ("/sd/sig240x12-2.tar", 12),
-            ):
-                rc = JpegFunc.pictview(fname, fps)
-                if rc < 0:
-                    break
-                st = get_keystring()
-                if "q" in st:
-                    rc = -1
-                    break
-            if rc < 0:
-                break
-            gc.collect()
-    finally:
-        print("Leave main")
-        JpegFunc.end()
-        screen.recoverRefresh()
-
 
 def run():
     print("Enter main")
