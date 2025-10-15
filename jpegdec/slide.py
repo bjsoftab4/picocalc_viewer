@@ -1,4 +1,4 @@
-# test jpeg draw functions
+# slide show  scan /, /sd and draw
 
 import io
 import time
@@ -7,7 +7,6 @@ import jpegdec
 import gc
 import os
 
-import picocalc
 
 wmax=320
 hmax=320
@@ -53,7 +52,10 @@ def run():
                 for fn in flist:
                     rc = JpegFunc.single_view(fdir + fn)
                     if rc == 1:
-                        time.sleep(5)
+                        for k in range(100):
+                            if checkKey():
+                                break
+                            time.sleep_ms(50)
                     st = getKeystring()
                     if 'q' in st:
                         rc = -1
@@ -61,6 +63,8 @@ def run():
                 if rc < 0:
                     break
                 gc.collect()
+            if rc < 0:
+                break
     finally:
         print("Leave main")
         JpegFunc.end()

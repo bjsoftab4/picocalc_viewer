@@ -1,4 +1,7 @@
-"""test jpeg draw functions"""
+"""
+test program for scaling
+
+"""
 
 # split draw
 
