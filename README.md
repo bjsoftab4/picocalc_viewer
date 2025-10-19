@@ -45,4 +45,6 @@ view.py  再生表示するpythonプログラム\
 import view し view.run() で起動します  picocalcのキーを何か押してスキップ。q キーで終了。
 前記の tar ファイルを /sd から読み込む設定にしています。
 
+movie.py  動画再生するプログラム　前記view.pyと同等
 
+slide.py  SDファイル内の jpeg ファイルを連続再生するプログラム　画面より大きければ縮小する。
