@@ -1,12 +1,9 @@
 # test jpeg draw functions
 
-# import io
-# import time
 import gc
 
 import picocalc
 
-# from picojpeg import PicoJpeg
 from jpegfunc import JpegFunc
 
 wmax = 320

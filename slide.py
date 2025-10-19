@@ -1,12 +1,10 @@
-# obsolite sample program
+# slide show  scan /, /sd and draw
 
-# import io
-# import time
+import time
 import picocalc
-# import jpegdec
 import gc
+import os
 
-# from picojpeg import PicoJpeg
 from jpegfunc import JpegFunc
 
 wmax = 320
@@ -50,23 +48,25 @@ def run():
 
         while True:
             rc = 0
-            for fname, fps in (
-                ("/sd/countdown.tar", 8),
-                ("/sd/sig320x8-1.tar", 8),
-                ("/sd/sig320x8-2.tar", 8),
-                ("/sd/sig240x12-1.tar", 12),
-                ("/sd/sig240x12-2.tar", 12),
-            ):
-                rc = JpegFunc.pictview(fname, fps)
+
+            for fdir in ("/sd/", "/"):
+                flist = os.listdir(fdir)
+                for fn in flist:
+                    rc = JpegFunc.single_view(fdir + fn)
+                    if rc == 1:
+                        for k in range(100):
+                            if checkKey():
+                                break
+                            time.sleep_ms(50)
+                    st = getKeystring()
+                    if "q" in st:
+                        rc = -1
+                        break
                 if rc < 0:
                     break
-                st = getKeystring()
-                if "q" in st:
-                    rc = -1
-                    break
+                gc.collect()
             if rc < 0:
                 break
-            gc.collect()
     finally:
         print("Leave main")
         JpegFunc.end()
