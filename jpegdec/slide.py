@@ -1,15 +1,18 @@
 # slide show  scan /, /sd and draw
 
-import io
+# import io
 import time
 import picocalc
-import jpegdec
+# import jpegdec
 import gc
 import os
 
+# from picojpeg import PicoJpeg
+from jpegfunc import JpegFunc
 
-wmax=320
-hmax=320
+wmax = 320
+hmax = 320
+
 
 def checkKey():
     global keyb
@@ -18,24 +21,26 @@ def checkKey():
         return False
     return True
 
+
 def getKeystring():
     global keyb
     kc = keyb.keyCount()
     if kc == 0:
         return ""
-    buf = bytearray(kc+1)
+    buf = bytearray(kc + 1)
     keyb.readinto(buf)
     st = buf.rstrip(b"\0").decode()
     return st
 
+
 class MyException(Exception):
     pass
 
-from picojpeg import PicoJpeg
-from jpegfunc import JpegFunc
 
 screen = picocalc.display
 keyb = picocalc.keyboard
+
+
 def run():
     global screen
     print("Enter main")
@@ -57,7 +62,7 @@ def run():
                                 break
                             time.sleep_ms(50)
                     st = getKeystring()
-                    if 'q' in st:
+                    if "q" in st:
                         rc = -1
                         break
                 if rc < 0:
@@ -70,6 +75,6 @@ def run():
         JpegFunc.end()
         screen.recoverRefresh()
 
+
 if __name__ == "__main__":
     run()
-

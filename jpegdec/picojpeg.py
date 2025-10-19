@@ -43,7 +43,7 @@ class PicoJpeg:
         return jpegdec.decode_split_buffer(bufnum, newpos, buf)
 
     @classmethod
-    def start(cls, mode = None):
+    def start(cls, mode=None):
         if mode is None:
             mode = 0
         return jpegdec.start(mode)

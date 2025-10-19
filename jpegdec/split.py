@@ -4,13 +4,13 @@ test program for split read
 
 # split draw
 
-import io
+# import io
 import time
-import gc
-import os
+# import gc
+# import os
 
 import picocalc
-from picojpeg import PicoJpeg
+# from picojpeg import PicoJpeg
 from jpegfunc import JpegFunc
 
 WMAX = 320
@@ -37,10 +37,8 @@ def get_keystring():
     return st
 
 
-
 class MyException(Exception):
     pass
-
 
 
 def run():
