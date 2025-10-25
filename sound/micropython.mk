@@ -1,0 +1,20 @@
+SOUND_MOD_DIR := $(USERMOD_DIR)
+
+# Add all C files to SRC_USERMOD.
+SRC_USERMOD += $(SOUND_MOD_DIR)/sound.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/bitstream.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/buffers.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/dct32.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/dequant.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/dqchan.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/huffman.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/hufftabs.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/imdct.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/mp3dec.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/mp3tabs.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/polyphase.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/scalfact.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/stproc.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/subband.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/trigtabs.c
+SRC_USERMOD += $(SOUND_MOD_DIR)/Adafruit_MP3.cpp
