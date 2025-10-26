@@ -78,7 +78,7 @@ bool addPcmbuff(int16_t *buf, int siz) {
 static void sound_pwm_start(int delay_us) {
  // Tell GPIO 0 and 1 they are allocated to the PWM
     gpio_set_function(26, GPIO_FUNC_PWM);
-    // gpio_set_function(27, GPIO_FUNC_PWM);
+    gpio_set_function(27, GPIO_FUNC_PWM);
 
     // Find out which PWM slice is connected to GPIO 0 (it's slice 0)
     uint slice_num = pwm_gpio_to_slice_num(26);
@@ -93,9 +93,11 @@ static void sound_pwm_start(int delay_us) {
 }
 
 static void sound_pwm_stop() {
+    cancel_repeating_timer(&sound_timer);   
     uint slice_num = pwm_gpio_to_slice_num(26);
     pwm_set_enabled(slice_num, false);
-    cancel_repeating_timer(&sound_timer);   
+    gpio_set_function(26, GPIO_FUNC_NULL);
+    gpio_set_function(27, GPIO_FUNC_NULL);
 }
 
 #define WAIT_US (23)    // 44KHz
@@ -195,12 +197,69 @@ static mp_obj_t infobuff(size_t n_args, const mp_obj_t *args) {
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(infobuff_obj, 0, 0, infobuff);
 
 #include "mp3common.h"
-static mp_obj_t mp3decode(size_t n_args, const mp_obj_t *args) {
-    MP3InitDecoder();
-	return mp_obj_new_int(0);
+static mp_obj_t mp3initdecoder(size_t n_args, const mp_obj_t *args) {
+    HMP3Decoder decoder = MP3InitDecoder();
+    return mp_obj_new_int((int)decoder);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp3initdecoder_obj, 0, 0, mp3initdecoder);
+
+static mp_obj_t mp3getnextframeinfo(size_t n_args, const mp_obj_t *args) {
+    HMP3Decoder hMP3Decoder;
+    MP3FrameInfo *mp3FrameInfo;
+    unsigned char *buf;
+    mp_buffer_info_t fibuf, datbuf;
+
+    hMP3Decoder = (HMP3Decoder)mp_obj_get_int(args[0]);
+    mp_get_buffer_raise(args[1], &fibuf, MP_BUFFER_READ);
+    mp3FrameInfo  = (MP3FrameInfo *)fibuf.buf;
+    mp_get_buffer_raise(args[2], &datbuf, MP_BUFFER_READ);
+    buf = (unsigned char *)datbuf.buf;
+    int rc;
+    rc = MP3GetNextFrameInfo(hMP3Decoder, mp3FrameInfo, buf);
+    return mp_obj_new_int(rc);
 }
 
-static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp3decode_obj, 1, 2, mp3decode);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp3getnextframeinfo_obj, 3, 3, mp3getnextframeinfo);
+
+static mp_obj_t mp3decode(size_t n_args, const mp_obj_t *args) {
+    HMP3Decoder hMP3Decoder;
+    unsigned char *buf;
+    int bytes_left;
+    short *audiodata;
+    mp_buffer_info_t datbuf, abuf;
+
+    hMP3Decoder = (HMP3Decoder)mp_obj_get_int(args[0]);
+    mp_get_buffer_raise(args[1], &datbuf, MP_BUFFER_READ);
+    buf = (unsigned char *)datbuf.buf;
+    bytes_left = (int)mp_obj_get_int(args[2]);
+    mp_get_buffer_raise(args[3], &abuf, MP_BUFFER_READ);
+    audiodata = (short *)abuf.buf;
+    int rc, err;
+    err = MP3Decode(hMP3Decoder, &buf, &bytes_left, audiodata, 0);
+    if (err != ERR_MP3_NONE) {
+        rc = err;
+    } else {
+        rc = bytes_left;
+    }
+	return mp_obj_new_int(rc);
+}
+
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp3decode_obj, 5, 5, mp3decode);
+
+static mp_obj_t mp3findsyncword(size_t n_args, const mp_obj_t *args) {
+    unsigned char *buf;
+    int nBytes;
+    mp_buffer_info_t datbuf;
+    
+    mp_get_buffer_raise(args[0], &datbuf, MP_BUFFER_READ);
+    buf = datbuf.buf;
+    nBytes = mp_obj_get_int(args[1]);
+
+    int rc = MP3FindSyncWord(buf, nBytes);
+    return mp_obj_new_int(rc);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp3findsyncword_obj, 2, 2, mp3findsyncword);
+
 
 static const mp_rom_map_elem_t sound_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_sound) },
@@ -210,7 +269,10 @@ static const mp_rom_map_elem_t sound_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_addbuff), MP_ROM_PTR(&addbuff_obj)},
     {MP_ROM_QSTR(MP_QSTR_testbuff), MP_ROM_PTR(&testbuff_obj)},
     {MP_ROM_QSTR(MP_QSTR_infobuff), MP_ROM_PTR(&infobuff_obj)},
+    {MP_ROM_QSTR(MP_QSTR_mp3initdecoder), MP_ROM_PTR(&mp3initdecoder_obj)},
+    {MP_ROM_QSTR(MP_QSTR_mp3getnextframeinfo), MP_ROM_PTR(&mp3getnextframeinfo_obj)},
     {MP_ROM_QSTR(MP_QSTR_mp3decode), MP_ROM_PTR(&mp3decode_obj)},
+    {MP_ROM_QSTR(MP_QSTR_mp3findsyncword), MP_ROM_PTR(&mp3findsyncword_obj)},
 };
 static MP_DEFINE_CONST_DICT(sound_globals, sound_globals_table);
 /* methods end */
