@@ -19,7 +19,6 @@ target_sources(usermod_sound INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/stproc.c
     ${CMAKE_CURRENT_LIST_DIR}/subband.c
     ${CMAKE_CURRENT_LIST_DIR}/trigtabs.c
-    ${CMAKE_CURRENT_LIST_DIR}/Adafruit_MP3.cpp
 )
 
 # Add the current directory as an include directory.

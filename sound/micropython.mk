@@ -17,4 +17,3 @@ SRC_USERMOD += $(SOUND_MOD_DIR)/scalfact.c
 SRC_USERMOD += $(SOUND_MOD_DIR)/stproc.c
 SRC_USERMOD += $(SOUND_MOD_DIR)/subband.c
 SRC_USERMOD += $(SOUND_MOD_DIR)/trigtabs.c
-SRC_USERMOD += $(SOUND_MOD_DIR)/Adafruit_MP3.cpp

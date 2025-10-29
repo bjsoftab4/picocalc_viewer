@@ -34,6 +34,13 @@ class DecodeMP3:
     audiodata = memoryview(audiodata1)
     audioflag = 1
     audiopos = 0
+    pcmbuf = memoryview(bytearray(MAX_BUFFER_LEN * 2 * 20))
+    pcmdata1 = memoryview(pcmbuf[0:len(pcmbuf)//2])
+    pcmdata2 = memoryview(pcmbuf[len(pcmbuf)//2:len(pcmbuf)])
+    pcmdata = memoryview(pcmdata1)
+    pcmflag = 1
+    pcmpos = 0
+    pcmlen = len(pcmbuf)//4
     
     filedata1 = bytearray(4096)
     filedata2 = bytearray(4096)
@@ -135,7 +142,56 @@ class DecodeMP3:
                     if i % 32 == 31:
                         print("")
                 break
-
+            
+    @classmethod
+    def push_pcm(cls, inbuf):
+        left = 0
+        if cls.pcmpos + len(inbuf) <= len(cls.pcmdata):	#copy normally
+            cls.pcmdata[cls.pcmpos:cls.pcmpos+len(inbuf)] = inbuf[0:len(inbuf)]
+            cls.pcmpos += len(inbuf)
+            if cls.pcmpos < len(cls.pcmdata):
+                return
+        else:	# exceed buffer
+            rest = len(cls.pcmdata) - cls.pcmpos
+            cls.pcmdata[cls.pcmpos:len(cls.pcmdata)] = inbuf[0:rest]
+            left = len(inbuf) - rest
+            
+        #print(cls.pcmflag, sound.dma_getcount())
+        #cls.hexdump(memoryview(cls.pcmdata), "cls.pcmdata")
+        if cls.pcmflag == 1:	# wrote first half (playing 2nd half)
+            while sound.dma_getcount() < cls.pcmlen / 2:
+                pass
+        else:
+            while sound.dma_getcount() >= cls.pcmlen / 2:
+                pass
+        #print("leav",cls.pcmflag, sound.dma_getcount())
+        cls.pcmpos = 0
+        if cls.pcmflag == 1:
+            cls.pcmdata = memoryview(cls.pcmdata2)
+            cls.pcmflag = 2
+        else:
+            cls.pcmdata = memoryview(cls.pcmdata1)
+            cls.pcmflag = 1
+        if left != 0:
+            cls.pcmdata[0:left] = inbuf[rest:len(inbuf)]
+            cls.pcmpos = left
+            
+        if False: #debug
+            if pcmdata[0] != 0:
+                for i in range(len(pcmdata)):
+                    print('{:02x}'.format(pcmdata[i]), end="")
+                    if i % 2 != 0:
+                        print(' ',end="")
+                    if i % 32 == 31:
+                        print("")
+                break
+    @classmethod
+    def hexdump(cls, buf, title=""):
+        print(title)
+        for i in range(32):
+            print(buf[i],end=" ")
+        print("")
+        
     @classmethod
     def main(cls, infile):
         cls.audiodata = memoryview(cls.audiodata1)
@@ -161,7 +217,8 @@ class DecodeMP3:
         frameinfo = bytearray(32)
         audiobuf0 = bytearray(MAX_BUFFER_LEN * 2)
         audiobuf = memoryview(audiobuf0)
-        
+        sound.dma_play(memoryview(cls.pcmbuf), 44100)
+        pcmbufx = memoryview(bytearray(MAX_BUFFER_LEN * 2 * 2))
         while cls.mp3file_find_sync_word():
             if checkKey():
                 break
@@ -176,9 +233,12 @@ class DecodeMP3:
             if fs != samprate / 1:
                 fs = samprate / 1
                 delay = int(1_000_000 / fs)
-                sound.reopen(delay, nchans)
+                #sound.reopen(delay, nchans)
                 cls.print_frameinfo(frameinfo)
                 print(f"fs={fs}, delay={delay}")
+                sound.dma_end()
+                sound.dma_play(memoryview(cls.pcmbuf), int(fs))
+
 
             #cls.print_frameinfo(frameinfo)
             #print(fi)
@@ -205,7 +265,11 @@ class DecodeMP3:
                 if rc < 0:
                     print("give up")
                     break
-            cls.push_audio(audiobuf[0:outputsamps * 2])
+            #print(cls.pcmflag, sound.dma_getcount(), outputsamps)
+            sound.mp3pcm2dma(audiobuf[0:outputsamps * 2], pcmbufx,0)
+            #cls.hexdump(memoryview(cls.pcmbuf), "cls.pcmbuf")
+                    
+            cls.push_pcm(pcmbufx[0:outputsamps * 2])
             #rc = sound.mp3decode(decoder, inbuf, bytes_left, audiodata, 0);
             #print(rc)
             cls.CONSUME(cls.BYTES_LEFT() - rc) 
@@ -213,8 +277,9 @@ fs = 11000
 #delay = 1_000_000 / 44100
 delay = int(1_000_000 / fs)
 keyb = picocalc.keyboard
-sound.open(delay)
-PicoJpeg.start(0)
+#sound.open(delay)
+
+
 fdir = "/sd"
 flist = os.listdir(fdir)
 flist.sort()
@@ -232,5 +297,5 @@ try:
             st = getKeystring()
 finally:
     print("close")
-    sound.close()
+    sound.dma_end()
     
