@@ -304,8 +304,12 @@ static  void drawCursor(uint16_t x, uint16_t y) {
     uint16_t yy = y * CH_H;
     fill_rect_4bpp(fb, xx, yy, CH_W, CH_H, clWhite);
 }
+volatile uint16_t dispCursorTerm;
 
 bool dispCursor(repeating_timer_t *rt) {
+    if (dispCursorTerm == 0xDEAD){
+        return false;
+    }
     if (escMode != NONE)
       return true;
     //sc_updateChar(p_XP, p_YP);  
@@ -1777,7 +1781,9 @@ static mp_obj_t vtterminal_init(mp_obj_t fb_obj){
     currentTextTable=G0TABLE;
     resetToInitialState();
     setCursorToHome();
-
+    dispCursorTerm = 0xDEAD;
+    sleep_ms(251);
+    dispCursorTerm = 0;
     //init the timer and callback
     add_repeating_timer_ms(250, dispCursor, NULL, &cursor_timer);
     return mp_const_true;

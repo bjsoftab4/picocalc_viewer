@@ -102,7 +102,7 @@ static const uint16_t defaultLUT[256] = {
 };//standar vt100 color table with byte sweep
 
 volatile uint8_t JPEG_override = 0;     //JPEGDEC  To prevent spi-dma while running JPEGDEC
-
+volatile int8_t DMA_channel = -1;
 static void Write_dma(const uint8_t *src, size_t len);
 static void command(uint8_t com, size_t len, const char *data) ;
 void RGB565Update(uint8_t *frameBuff,uint32_t length, const uint16_t *LUT);
@@ -261,7 +261,11 @@ static mp_obj_t pd_init(mp_obj_t fb_obj, mp_obj_t color_type, mp_obj_t autoR){
     gpio_put(RST_PIN, 0);
     gpio_set_dir(RST_PIN, GPIO_OUT);
 //DMA init
+    if (DMA_channel != -1) {
+        dma_channel_unclaim(DMA_channel);
+    }
     st_dma = dma_claim_unused_channel(true);
+    DMA_channel = st_dma;
     dma_channel_config config = dma_channel_get_default_config(st_dma);
     channel_config_set_transfer_data_size(&config, DMA_SIZE_8);
     channel_config_set_bswap(&config, false);
