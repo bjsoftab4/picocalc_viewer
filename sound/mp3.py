@@ -5,15 +5,21 @@ import time
 import sound
 import picocalc
 from picojpeg import PicoJpeg
+
+keyb = picocalc.keyboard
+def waitKeyOff():
+    time.sleep_ms(100)
+    while checkKey():
+        st = getKeystring()
+        time.sleep_ms(200)
+
 def checkKey():
-    global keyb
     kc = keyb.keyCount()
     if kc == 0:
         return False
     return True
 
 def getKeystring():
-    global keyb
     kc = keyb.keyCount()
     if kc == 0:
         return ""
@@ -22,11 +28,6 @@ def getKeystring():
     st = buf.rstrip(b"\0").decode()
     return st
 
-MAX_NGRAN = 2
-MAX_NCHAN = 2
-MAX_NSAMP = 576
-MAX_BUFFER_LEN=(MAX_NSAMP * MAX_NGRAN * MAX_NCHAN)
-ERR_MP3_NONE = 0
 class Pcm:
     @classmethod
     def init(cls):
@@ -62,9 +63,13 @@ class Pcm:
     
     
 class DecodeMP3:
+    MAX_SAMPLE_SIZE=(576 * 2 * 2)    # max dataset of mp3frame
+    ERR_MP3_NONE = 0
     MIN_FILE_BUF_SIZE = 1044
-    pcmbuf = memoryview(bytearray(MAX_BUFFER_LEN * 2 * 10))
-    pcmlen = len(pcmbuf)//4
+    frameinfo = memoryview(bytearray(32))
+    decodedbuf = memoryview(bytearray(MAX_SAMPLE_SIZE * 2))
+
+    pcmbuf = memoryview(bytearray(MAX_SAMPLE_SIZE * 2 * 10)) 
     
     filedata1 = bytearray(2048)
     filedata2 = bytearray(2048)
@@ -75,7 +80,9 @@ class DecodeMP3:
     stream_end = 0
     fill_flag = False
     fileremain = 0
-
+    sr0 = 0
+    br0 = 0
+    
     @classmethod
     def BYTES_LEFT(cls):
         return cls.stream_end - cls.stream_ptr
@@ -89,7 +96,7 @@ class DecodeMP3:
         cls.stream_ptr += n
 
     @classmethod
-    def skip_id3v2(cls, fi=None):
+    def skip_id3v2(cls):
         if cls.BYTES_LEFT() < 10:
             return 0
 
@@ -110,18 +117,18 @@ class DecodeMP3:
         size = (data[6] << 21) | (data[7] << 14) | (data[8] << 7) | (data[9])
         size += 10 # size excludes the "header" (but not the "extended header")
         cls.CONSUME(size)
-        print(f"skip_id3v2:{size}bytes")
+        #print(f"skip_id3v2:{size}bytes")
 
-        if fi is not None:
+        if cls.fi is not None:
             if cls.BYTES_LEFT() < 0:
                 left = -cls.BYTES_LEFT()
-                print("skip_id3v2 overrun", left)
+                #print("skip_id3v2 overrun", left)
                 left -= len(cls.stream)
-                rc = fi.seek(left, 1)
+                rc = cls.fi.seek(left, 1)
                 cls.fileremain -= left
-                rc = cls.fillfilebuffer(fi, True)
+                rc = cls.fillfilebuffer(True)
                 if rc < 0:
-                    print("skip id EOF")
+                    #print("skip id EOF")
                     return -1
         return 0
     
@@ -179,8 +186,8 @@ class DecodeMP3:
         int version;
     } MP3FrameInfo;
     """
-    @classmethod
-    def print_frameinfo(cls, frameinfo):
+    @staticmethod
+    def print_frameinfo(frameinfo):
         #print(frameinfo)
         rc = unpack("<LLLLLLL", frameinfo)
         #print(rc)
@@ -189,18 +196,18 @@ class DecodeMP3:
         #bitrate, nchans, samprate, bitspersample, outputsamps, layer, version = unpack_from("<i", frameinfo)
         print(f"bitrate={bitrate}, nchans={nchans},samprate={samprate},bitspersample={bitspersample},outputsamps={outputsamps},layer={layer},version={version}")
 
-    @classmethod
-    def hexdump(cls, buf, title=""):
+    @staticmethod
+    def hexdump(buf, title=""):
         print(title)
         for i in range(32):
             print(buf[i],end=" ")
         print("")
         
     @classmethod
-    def fillfilebuffer(cls, fi, fillall = False):
+    def fillfilebuffer(cls, fillall = False):
         rc = 0
         if fillall:
-            rc = fi.readinto(cls.stream)
+            rc = cls.fi.readinto(cls.stream)
             if rc <= 0:		# EOF
                 return -1
             cls.fileremain -= rc
@@ -209,7 +216,7 @@ class DecodeMP3:
             cls.fill_flag = True
             
         if cls.fill_flag:
-            rc = fi.readinto(cls.stream2)
+            rc = cls.fi.readinto(cls.stream2)
             if rc <= 0:		# EOF
                 return -1
             cls.fileremain -= rc
@@ -218,7 +225,7 @@ class DecodeMP3:
 
 
     @classmethod
-    def mp3decode(cls, decoder, audiobuf):
+    def mp3decode(cls, decoder, decodedbuf):
         inbuf = cls.stream[cls.READ_PTR():]
         bytes_left = cls.BYTES_LEFT()
         bytes_add = cls.MIN_FILE_BUF_SIZE - bytes_left
@@ -229,7 +236,7 @@ class DecodeMP3:
             cls.stream[0:bytes_left] = cls.stream[cls.stream_ptr:cls.stream_end]
             cls.stream[bytes_left:bytes_left+bytes_add] = cls.stream2[0:bytes_add]
             inbuf = cls.stream[0:cls.MIN_FILE_BUF_SIZE]
-            rc = sound.mp3decode(decoder, inbuf, len(inbuf), audiobuf, 0)
+            rc = sound.mp3decode(decoder, inbuf, len(inbuf), decodedbuf, 0)
             if rc <= bytes_left:
                 cls.CONSUME(rc)
             else:
@@ -237,7 +244,7 @@ class DecodeMP3:
                 cls.CONSUME(rc - bytes_left)
                 
         else:
-            rc = sound.mp3decode(decoder, inbuf, len(inbuf), audiobuf, 0)
+            rc = sound.mp3decode(decoder, inbuf, len(inbuf), decodedbuf, 0)
             cls.CONSUME(rc)
         #print(" - Leave decode result=", rc)
         return rc
@@ -247,7 +254,7 @@ class DecodeMP3:
     def getframeinfo(cls, decoder, frameinfo):
         inbuf = cls.stream[cls.READ_PTR():]
         bytes_left = cls.BYTES_LEFT()
-        bytes_add = 6 - bytes_left
+        bytes_add = 6 - bytes_left  # mpeg frame info is 4 or 6 byte (with CRC)
         #print("Enter getframeinfo", end="")
         if bytes_add > 0:
             #print("getframeinfo add data", bytes_add) #, end="")
@@ -261,140 +268,160 @@ class DecodeMP3:
             print(" - Leave  err=", err)
         return err
 
+    @classmethod
+    def set_minfilebufsize(cls, bitrate, samprate):
+        cls.MIN_FILE_BUF_SIZE = int(144 * bitrate / samprate) + 6   # 6 for next header
+        return
+        
+    @classmethod
+    def part_decode(cls):
+        rc = cls.skip_id3v2()
+        if rc < 0:
+            print("EOF")
+            return -1
+        rc = cls.getframeinfo(cls.decoder, cls.frameinfo)
+        if rc < 0:
+            cls.hexdump(cls.stream[cls.READ_PTR():], "frameinfo")
+            print("MP3GetNextFrameInfo rc=", err)
+            return -1
+        rc = unpack("<LLLLLLL", cls.frameinfo)
+        bitrate, nchans, samprate, bitspersample, outputsamps, layer, version = rc
+        if cls.br0 != bitrate:
+            cls.br0 = bitrate
+            cls.set_minfilebufsize(bitrate, samprate)
+        if cls.sr0 != samprate:
+            cls.sr0 = samprate
+            cls.set_minfilebufsize(bitrate, samprate)
+            #print(cls.MIN_FILE_BUF_SIZE)
+            cls.print_frameinfo(cls.frameinfo)
+            Pcm.stop()
+            Pcm.setfreq(samprate)
+            Pcm.start()
+            return 1
+            
+        rc = cls.mp3decode(cls.decoder, cls.decodedbuf)
+        if rc < 0:
+            print("mp3decode rc=",rc)
+            return -1
+        left = Pcm.push(cls.decodedbuf[0:outputsamps * 2], nchans)
+        return 0
 
     @classmethod
-    def main(cls, infile):
-        sr0 = 0
-        br0 = 0
-        cls.MIN_FILE_BUF_SIZE = int(144 * 320_000 / 44_100) + 6
+    def part_fileread():
+        rc = cls.fillfilebuffer()
+        if rc < 0:
+           print("EOF")
+           return -1
+        return 0
+    
 
-        decoder = sound.mp3initdecoder()
-        fi = open(infile, "rb")
-        fsize = fi.seek(0, 2)  # os.SEEK_END
-        fi.seek(0, 0)  # os.SEEK_SET
+
+    @classmethod
+    def mainloop(cls, infile):
+        cls.sr0 = 0
+        cls.br0 = 0
+        cls.set_minfilebufsize(320_000, 44_100)
+        cls.decoder = sound.mp3initdecoder()
+        cls.fi = open(infile, "rb")
+        fsize = cls.fi.seek(0, 2)  # os.SEEK_END
         cls.fileremain = fsize
-
-        cls.stream_end = 0
-        cls.stream_ptr = 0
-
-        rc = cls.fillfilebuffer(fi, True)
-
-        frameinfo = memoryview(bytearray(32))
-        audiobuf = memoryview(bytearray(MAX_BUFFER_LEN * 2))
+        cls.fi.seek(0, 0)  # os.SEEK_SET
+        rc = cls.fillfilebuffer(True)
 
         Pcm.setbuffer(memoryview(cls.pcmbuf))
         Pcm.setfreq(44100)
         Pcm.start()
-        pcmbufx = memoryview(bytearray(MAX_BUFFER_LEN * 2 * 2))
+
         wait_us = 0
         t_start = time.ticks_ms()
         progress = int(50 * cls.fileremain / fsize)
-        bar = "|"
-        bar += " " * 48
-        bar += "|"
+        bar = "-" * 50
         
-        rc = cls.skip_id3v2(fi)
+        rc = cls.skip_id3v2()
         if rc < 0:
-            print("EOF")
             return
+        
         while cls.mp3file_find_sync_word():
             if checkKey():
-                Pcm.stop()
                 break
-            rc = cls.skip_id3v2(fi)
-            if rc < 0:
-                print("EOF")
-                break
-            #err = sound.mp3getnextframeinfo(decoder, frameinfo, cls.stream[cls.READ_PTR():]);
-            err = cls.getframeinfo(decoder, frameinfo)
-            if err != ERR_MP3_NONE:  #バッファが4バイト未満の時もエラーになる
-                cls.hexdump(cls.stream[cls.READ_PTR():], "frameinfo")
-                print("MP3GetNextFrameInfo rc=", err)
-                break
-            if err == ERR_MP3_NONE:
-                rc = unpack("<LLLLLLL", frameinfo)
-                bitrate, nchans, samprate, bitspersample, outputsamps, layer, version = rc
-                if br0 != bitrate:
-                    br0 = bitrate
-                    cls.MIN_FILE_BUF_SIZE = int(144 * bitrate / samprate) + 6
-                if sr0 != samprate:
-                    sr0 = samprate
-                    cls.MIN_FILE_BUF_SIZE = int(144 * bitrate / samprate) + 6
-                    #print(cls.MIN_FILE_BUF_SIZE)
-                    cls.print_frameinfo(frameinfo)
-                    Pcm.stop()
-                    Pcm.setfreq(samprate)
-                    Pcm.start()
-                    print(bar,end="\r")
-                    
-            bytes_left = cls.BYTES_LEFT()
-            inbuf = cls.stream[cls.READ_PTR():]
-                
-            #rc = sound.mp3decode(decoder, inbuf, bytes_left, audiobuf, 0)
-            rc = cls.mp3decode(decoder, audiobuf)
-            if rc < 0:
-                print("mp3decode rc=",rc)
-                break
-            #print(cls.pcmflag, sound.dma_getcount(), outputsamps)
+
             lap0 = time.ticks_us()
-            while Pcm.get_freebuf() <= outputsamps * 4:
-                # print(Pcm.get_freebuf())
+            while Pcm.get_freebuf() <= len(cls.pcmbuf) // 4 // 2:	# get_freebuf returns sample counts
+                #print(Pcm.get_freebuf())
                 pass
             wait_us += time.ticks_diff(time.ticks_us(), lap0)
 
-            left = Pcm.push(audiobuf[0:outputsamps * 2], nchans)
-            if( left != 0):
-                print("left=",left)
-
-            rc = cls.fillfilebuffer(fi)
+            rc = cls.part_decode()
+            if rc == 1:
+                print(bar,end="\r")
+                continue
             if rc < 0:
-               print("EOF")
+                break
+
+            rc = cls.fillfilebuffer()
+            if rc < 0:
                break
-    
-            #rc = sound.mp3decode(decoder, inbuf, bytes_left, audiodata, 0);
-            #print(rc)
+
             p1 = int(50 * cls.fileremain / fsize)
             if p1 != progress:
                 progress = p1
-                print("x",end="")
+                print("+",end="")
+        Pcm.stop()
         print("")
         total_ms = time.ticks_ms() - t_start
-        print(f"wait_ms={int(wait_us/1000)}, total_ms={total_ms}, CPU LOAD={int(wait_us/10/total_ms)}%")
-        
-sr0 = 11000
-keyb = picocalc.keyboard
-while checkKey():
-    st = getKeystring()
-    time.sleep_ms(100)
-Pcm.init()
-fdir = "/sd/mp3-0"
-#fdir = "/"
-flist = os.listdir(fdir)
-flist.sort()
-print(flist)
-try:
+        #print(f"wait_ms={int(wait_us/1000)}, total_ms={total_ms}, CPU LOAD={100-int(wait_us/10/total_ms)}%")
+
+def isdir(dname):
+    st = os.stat(dname)
+    if st[6] == 0:
+        return True
+    return False
+
+def dirplay(dname):
+    flist = os.listdir(dname)
+    flist.sort()
+    print("Scan directory:"+dname)
+    dirlist = [
+        f for f in flist if isdir(dname+"/"+f)
+    ]
+    for d in dirlist:
+        rc = dirplay(dname + "/" + d)
+        if rc < 0 :
+            return -1
+    filelist = [
+        f for f in flist if not isdir(dname+"/"+f) and f.endswith((".mp3",".MP3"))
+    ]
+    print("File list:", filelist)
     i = 0
-    while i < len(flist):
-        fn = flist[i]
+    while i < len(filelist):
+        waitKeyOff()
+
+        fn = dname + "/" + filelist[i]
+        
         if fn.endswith((".mp3",".MP3")):
-           print(fdir +"/" + fn)
-           DecodeMP3.main(fdir +"/" + fn)
+           print(fn)
+           DecodeMP3.mainloop(fn)
         if checkKey():
             st = getKeystring()
             if 'q' in st:
                 rc = -1
+                return -1
+            if 'n' in st:
                 break
             if 'p' in st:
                 i = i - 1
                 if( i < 0):
                     i = 0
                 continue
-        time.sleep_ms(100)
-        while checkKey():
-            st = getKeystring()
         i+=1
-finally:
-    print("close")
-    Pcm.deinit()
-    os.listdir("/")
-    
+    return 0
+           
+def run(fdir = "/sd"):
+    Pcm.init()
+    try:
+        dirplay(fdir)
+    finally:
+        print("close")
+        Pcm.deinit()
+        os.listdir("/")
+
