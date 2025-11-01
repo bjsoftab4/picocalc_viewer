@@ -146,14 +146,14 @@ MP3DecInfo *AllocateBuffers(void)
 #else
 
 	// Buffers:
-	static long s_mp3DecInfo[sizeof(MP3DecInfo)/4 +1];
-	static long fh[sizeof(FrameHeader)/4 +1];
-	static long si[sizeof(SideInfo)/4 +1];
-	static long sfi[sizeof(ScaleFactorInfo)/4 +1];
-	static long hi[sizeof(HuffmanInfo)/4 +1];
-	static long di[sizeof(DequantInfo)/4 +1];
-	static long mi[sizeof(IMDCTInfo)/4 +1];
-	static long sbi[sizeof(SubbandInfo)/4 +1];
+	static MP3DecInfo s_mp3DecInfo[1];
+	static FrameHeader fh[1];
+	static SideInfo si[1];
+	static ScaleFactorInfo sfi[1];
+	static HuffmanInfo hi[1];
+	static DequantInfo di[1];
+	static IMDCTInfo mi[1];
+	static SubbandInfo sbi[1];
 
 	mp3DecInfo = (MP3DecInfo *)s_mp3DecInfo;
 	ClearBuffer(mp3DecInfo, sizeof(MP3DecInfo));

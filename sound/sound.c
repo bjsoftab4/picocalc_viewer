@@ -22,12 +22,43 @@ volatile int8_t PWM_DMA_channel = -1;
 volatile int8_t PWM_DMA_channel2 = -1;
 volatile int8_t PWM_DMA_timer = -1;
 static uint ch_dma, ch2_dma, tm_dma;
-volatile int16_t *p_pwm_buffer;
-volatile int pwm_buffer_byte;
+volatile int16_t *p_pwm_buffer = NULL;
+volatile int pwm_buffer_byte = 0;
+static int pwm_dma_freq;
+static int pwm_dma_writepos;
 
-void pwm_dma_start(int16_t *addr, int size){
+void pwm_dma_setbuffer(int16_t *addr, int size){
     p_pwm_buffer = addr;
-    pwm_buffer_byte = size;
+    pwm_buffer_byte = size & 0xffffc;
+    pwm_dma_writepos = 0;
+}
+void pwm_dma_start(){
+    if( p_pwm_buffer != NULL) {
+        uint16_t *ptr = (uint16_t *)p_pwm_buffer;
+        for( int i = 0; i < pwm_buffer_byte / 2; i++) {
+            *ptr = 1024;
+            ptr++;
+        }
+    }
+    // set dma for pwmdata
+    dma_channel_config config = dma_channel_get_default_config(ch_dma);
+    channel_config_set_transfer_data_size(&config, DMA_SIZE_32);
+    channel_config_set_read_increment(&config, true);
+    channel_config_set_write_increment(&config, false);
+    channel_config_set_chain_to(&config, ch2_dma);
+    channel_config_set_bswap(&config, false);
+    channel_config_set_dreq(&config, dma_get_timer_dreq (tm_dma));
+    uint slice_num = pwm_gpio_to_slice_num(26);
+    dma_channel_configure(ch_dma, &config, &(pwm_hw->slice[slice_num].cc), NULL, 0, false);
+
+    // set dma for reset pwmdata DMA
+    dma_channel_config config2 = dma_channel_get_default_config(ch2_dma);
+    channel_config_set_transfer_data_size(&config2, DMA_SIZE_32);
+    channel_config_set_read_increment(&config2, false);
+    channel_config_set_write_increment(&config2, false);
+    channel_config_set_bswap(&config2, false);
+    dma_channel_configure(ch2_dma, &config2, &(dma_hw->ch[ch_dma].al3_read_addr_trig), &p_pwm_buffer, 1, false);
+    
     dma_channel_set_read_addr (ch_dma, p_pwm_buffer, false);
     dma_channel_set_trans_count (ch_dma, pwm_buffer_byte / 4, true);
 }
@@ -35,13 +66,142 @@ void pwm_dma_start(int16_t *addr, int size){
 uint32_t pwm_dma_get_count(){
     return dma_channel_hw_addr(ch_dma)->transfer_count;
 }
+int pwm_dma_get_curpos(){
+    int buflen = pwm_buffer_byte / 4;
+    int curpos = buflen - pwm_dma_get_count();
+    return curpos;
+}
 
+int pwm_dma_get_freebuf(){
+    int rc = 0;
+    int buflen = pwm_buffer_byte / 4;
+    int curpos = pwm_dma_get_curpos();
+    
+    rc = curpos - pwm_dma_writepos;
+    if( rc < 0) {
+        rc += buflen;
+    }
+    return rc;
+}
+
+static void pcmcopy1ch(uint32_t *out32, int16_t *in16, int len) {
+    int i;
+    int val;
+    uint level;
+    
+    for( i = 0; i < len; i++){
+        val = in16[i] + 32768;
+        level = val >> 5 ;
+        out32[i] = level << 16 | level;
+    }
+}
+
+static void pcmcopy2ch(uint16_t *out16, int16_t *in16, int len) {
+    int i;
+    int val;
+    uint level;
+    for( i = 0; i < len * 2; i++){
+        val = in16[i] + 32768;
+        level = val >> 5 ;
+        out16[i] = level;
+    }
+}
+
+int pwm_dma_pushdata(void *inbuf, int bytes, int mode){
+    /* mode=0 raw pcm data(int16_t x 2), =1 int16_t ch=1, =2 int16_t ch=2 */
+    int buflen = pwm_buffer_byte / 4;
+    int curpos = pwm_dma_get_curpos();
+    int wlen;
+    int wrote = 0;
+    int left = bytes / 4;
+    if( mode == 1) {
+        left = bytes / 2;
+    }
+    uint32_t *dest = (uint32_t *)p_pwm_buffer;
+    int16_t *src = (int16_t *)inbuf;
+    if( curpos <= pwm_dma_writepos) {
+        //  v curpos    v writepos
+        //  dddddddddddd           
+        //  can write data to end of buffer
+        wlen = buflen - pwm_dma_writepos;
+        if( wlen > left) {
+            wlen = left;
+        }
+        if(mode == 0){
+            memcpy((uint8_t*)(dest + pwm_dma_writepos), (uint8_t*)src, wlen * 4);
+        } else if(mode == 1) {
+            pcmcopy1ch(dest + pwm_dma_writepos, src, wlen);
+        } else if (mode == 2) {
+            pcmcopy2ch((uint16_t *)(dest + pwm_dma_writepos), src, wlen);
+        }
+        pwm_dma_writepos += wlen;
+        if( pwm_dma_writepos >= buflen) {
+            pwm_dma_writepos = 0;
+        }
+        wrote = wlen;
+        left -= wlen;
+    }
+    //    v writepos  v curpos    
+    // ddd            dddddddd
+    // can write data to curpos
+    if(left != 0) {
+        wlen = left;
+        if( wlen > curpos) {
+            wlen = curpos;
+        }
+        if( mode == 1) {
+            src += wrote;
+        } else {
+            src += wrote * 2;
+        }
+        if(mode == 0){
+            memcpy((uint8_t*)(dest + pwm_dma_writepos), (uint8_t*)src, wlen * 4);
+        } else if(mode == 1) {
+            pcmcopy1ch(dest + pwm_dma_writepos, src, wlen);
+        } else if (mode == 2) {
+            pcmcopy2ch((uint16_t *)(dest + pwm_dma_writepos), src, wlen);
+        }
+
+        pwm_dma_writepos += wlen;
+        left -= wlen;
+    }
+    return left;
+}
+
+
+void pwm_dma_setfreq(int target_hz){
+    pwm_dma_freq = target_hz;
+    if ( PWM_DMA_timer != -1) {
+        // set dma timer
+        uint sysclk_hz = clock_get_hz(clk_sys);
+        uint base_hz = sysclk_hz >> 16;
+        uint numer = target_hz / base_hz;
+        uint denom = numer * sysclk_hz / target_hz;
+        dma_timer_set_fraction (PWM_DMA_timer, (uint16_t)numer, (uint16_t)denom);
+    }
+}
 void pwm_dma_stop(){
     dma_channel_cleanup (ch_dma);
     dma_channel_cleanup (ch2_dma);
+    pwm_dma_writepos = 0;
 }
+void pwm_dma_deinit(){
+    pwm_dma_stop();
+    dma_channel_unclaim(ch_dma);
+    dma_channel_unclaim(ch2_dma);
+    dma_timer_unclaim(tm_dma);
 
-void pwm_dma_init(int target_hz){
+    p_pwm_buffer = NULL;
+    pwm_buffer_byte = 0;
+    PWM_DMA_channel = -1;
+    PWM_DMA_timer = -1;
+    PWM_DMA_channel2 = -1;
+}
+void pwm_dma_init(){
+    p_pwm_buffer = NULL;
+    pwm_buffer_byte = 0;
+    pwm_dma_freq = 44100;
+
     //DMA init
     if (PWM_DMA_channel != -1) {
         dma_channel_unclaim((uint)PWM_DMA_channel);
@@ -61,29 +221,8 @@ void pwm_dma_init(int target_hz){
     tm_dma = dma_claim_unused_timer (true);
     PWM_DMA_timer = (int8_t)tm_dma;
     
-    // set dma timer
-    uint sysclk_hz = clock_get_hz(clk_sys);
-    uint base_hz = sysclk_hz >> 16;
-    uint numer = target_hz / base_hz;
-    uint denom = numer * sysclk_hz / target_hz;
-    dma_timer_set_fraction (tm_dma, (uint16_t)numer, (uint16_t)denom);
+    pwm_dma_setfreq(pwm_dma_freq);
     
-    dma_channel_config config = dma_channel_get_default_config(ch_dma);
-    channel_config_set_transfer_data_size(&config, DMA_SIZE_32);
-    channel_config_set_read_increment(&config, true);
-    channel_config_set_write_increment(&config, false);
-    channel_config_set_chain_to(&config, ch2_dma);
-    channel_config_set_bswap(&config, false);
-    channel_config_set_dreq(&config, dma_get_timer_dreq (tm_dma));
-    uint slice_num = pwm_gpio_to_slice_num(26);
-    dma_channel_configure(ch_dma, &config, &(pwm_hw->slice[slice_num].cc), p_pwm_buffer, pwm_buffer_byte / 4, false);
-
-    dma_channel_config config2 = dma_channel_get_default_config(ch2_dma);
-    channel_config_set_transfer_data_size(&config2, DMA_SIZE_32);
-    channel_config_set_read_increment(&config2, false);
-    channel_config_set_write_increment(&config2, false);
-    channel_config_set_bswap(&config2, false);
-    dma_channel_configure(ch2_dma, &config2, &(dma_hw->ch[ch_dma].al3_read_addr_trig), &p_pwm_buffer, 1, false);
 
 }
 
@@ -210,22 +349,22 @@ bool addPcmbuff(int16_t *buf, int siz) {
 }
 
 static void pwm_port_init() {
- // Tell GPIO 0 and 1 they are allocated to the PWM
+    // Tell GPIO 0 and 1 they are allocated to the PWM
     gpio_set_function(26, GPIO_FUNC_PWM);
     gpio_set_function(27, GPIO_FUNC_PWM);
-
     // Find out which PWM slice is connected to GPIO 0 (it's slice 0)
     uint slice_num = pwm_gpio_to_slice_num(26);
     pwm_set_clkdiv_int_frac4(slice_num, 1, 0);
     pwm_set_wrap(slice_num, 2047);
     // Set the PWM running
     pwm_set_enabled(slice_num, true);
+
 }
 static void pwm_port_deinit() {
-    uint slice_num = pwm_gpio_to_slice_num(26);
-    pwm_set_enabled(slice_num, false);
     gpio_set_function(26, GPIO_FUNC_NULL);
     gpio_set_function(27, GPIO_FUNC_NULL);
+    uint slice_num = pwm_gpio_to_slice_num(26);
+    pwm_set_enabled(slice_num, false);
 }    
 
 static void sound_pwm_start(int delay_us, int channels) {
@@ -340,7 +479,70 @@ static mp_obj_t play(size_t n_args, const mp_obj_t *args) {
 	return mp_obj_new_tuple(3, res);
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(play_obj, 1, 2, play);
+//========== PCM module
+static mp_obj_t pcm_init(size_t n_args, const mp_obj_t *args) {
+    pwm_port_init();
+    pwm_dma_init();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_init_obj, 0, 0, pcm_init);
 
+static mp_obj_t pcm_deinit(size_t n_args, const mp_obj_t *args) {
+    pwm_dma_deinit();
+    pwm_port_deinit();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_deinit_obj, 0, 0, pcm_deinit);
+
+static mp_obj_t pcm_setbuffer(size_t n_args, const mp_obj_t *args) {
+    mp_buffer_info_t inbuf;
+    mp_get_buffer_raise(args[0], &inbuf, MP_BUFFER_READ);
+    int iDataSize = inbuf.len;
+    uint8_t *pData = (uint8_t *)inbuf.buf;
+    pwm_dma_setbuffer((int16_t *)pData, iDataSize);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_setbuffer_obj, 1, 1, pcm_setbuffer);
+
+static mp_obj_t pcm_setfreq(size_t n_args, const mp_obj_t *args) {
+    int freq = mp_obj_get_int(args[0]);
+    pwm_dma_setfreq(freq);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_setfreq_obj, 1, 1, pcm_setfreq);
+
+static mp_obj_t pcm_start(size_t n_args, const mp_obj_t *args) {
+    pwm_dma_start();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_start_obj, 0, 0, pcm_start);
+
+static mp_obj_t pcm_stop(size_t n_args, const mp_obj_t *args) {
+    pwm_dma_stop();
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_stop_obj, 0, 0, pcm_stop);
+
+static mp_obj_t pcm_get_freebuf(size_t n_args, const mp_obj_t *args) {
+    return  mp_obj_new_int(pwm_dma_get_freebuf());
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_get_freebuf_obj, 0, 0, pcm_get_freebuf);
+
+static mp_obj_t pcm_push(size_t n_args, const mp_obj_t *args) {
+    mp_buffer_info_t inbuf;
+    mp_get_buffer_raise(args[0], &inbuf, MP_BUFFER_READ);
+    int iDataSize = inbuf.len;
+    uint8_t *pData = (uint8_t *)inbuf.buf;
+    int mode = 0;
+    int rc;
+    if(n_args >= 2) {
+        mode = mp_obj_get_int(args[1]);
+    }
+    rc = pwm_dma_pushdata((void *)pData, iDataSize, mode);
+    return  mp_obj_new_int(rc);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_push_obj, 1, 2, pcm_push);
+//========== DMA module
 static mp_obj_t dma_play(size_t n_args, const mp_obj_t *args) {
 
     int result = 0;
@@ -354,8 +556,10 @@ static mp_obj_t dma_play(size_t n_args, const mp_obj_t *args) {
         freq = mp_obj_get_int(args[1]);     // freq
     }
     pwm_port_init();
-    pwm_dma_init(freq);
-    pwm_dma_start((int16_t *)pData, iDataSize);
+    pwm_dma_init();
+    pwm_dma_setbuffer((int16_t *)pData, iDataSize);
+    pwm_dma_setfreq(freq);
+    pwm_dma_start();
     
     mp_obj_t res[3];
 	res[0]= mp_obj_new_int(result);
@@ -365,8 +569,9 @@ static mp_obj_t dma_play(size_t n_args, const mp_obj_t *args) {
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(dma_play_obj, 1, 2, dma_play);
 
 static mp_obj_t dma_end(size_t n_args, const mp_obj_t *args) {
-    pwm_port_deinit();
     pwm_dma_stop();
+    pwm_dma_deinit();
+    pwm_port_deinit();
     
 	return mp_const_none;
 }
@@ -377,7 +582,7 @@ static mp_obj_t dma_getcount(size_t n_args, const mp_obj_t *args) {
     return  mp_obj_new_int(pwm_dma_get_count());
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(dma_getcount_obj, 0, 0, dma_getcount);
-
+//==========
 static mp_obj_t addbuff(size_t n_args, const mp_obj_t *args) {
     mp_buffer_info_t inbuf;
     mp_get_buffer_raise(args[0], &inbuf, MP_BUFFER_READ);
@@ -446,14 +651,14 @@ static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp3getnextframeinfo_obj, 3, 3, mp3get
 static mp_obj_t mp3decode(size_t n_args, const mp_obj_t *args) {
     HMP3Decoder hMP3Decoder;
     unsigned char *buf;
-    int bytes_left;
+    int bytes_left, buf_size;
     short *audiodata;
     mp_buffer_info_t datbuf, abuf;
 
     hMP3Decoder = (HMP3Decoder)mp_obj_get_int(args[0]);
     mp_get_buffer_raise(args[1], &datbuf, MP_BUFFER_READ);
     buf = (unsigned char *)datbuf.buf;
-    bytes_left = (int)mp_obj_get_int(args[2]);
+    buf_size = bytes_left = (int)mp_obj_get_int(args[2]);
     mp_get_buffer_raise(args[3], &abuf, MP_BUFFER_READ);
     audiodata = (short *)abuf.buf;
     // args[4] is not used
@@ -463,7 +668,7 @@ static mp_obj_t mp3decode(size_t n_args, const mp_obj_t *args) {
     if (err != ERR_MP3_NONE) {
         rc = err;
     } else {
-        rc = bytes_left;
+        rc = buf_size - bytes_left; // return processed bytes
     }
 	return mp_obj_new_int(rc);
 }
@@ -537,6 +742,14 @@ static const mp_rom_map_elem_t sound_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_addbuff), MP_ROM_PTR(&addbuff_obj)},
     {MP_ROM_QSTR(MP_QSTR_testbuff), MP_ROM_PTR(&testbuff_obj)},
     {MP_ROM_QSTR(MP_QSTR_infobuff), MP_ROM_PTR(&infobuff_obj)},
+    {MP_ROM_QSTR(MP_QSTR_pcm_init), MP_ROM_PTR(&pcm_init_obj)},
+    {MP_ROM_QSTR(MP_QSTR_pcm_deinit), MP_ROM_PTR(&pcm_deinit_obj)},
+    {MP_ROM_QSTR(MP_QSTR_pcm_start), MP_ROM_PTR(&pcm_start_obj)},
+    {MP_ROM_QSTR(MP_QSTR_pcm_stop), MP_ROM_PTR(&pcm_stop_obj)},
+    {MP_ROM_QSTR(MP_QSTR_pcm_setfreq), MP_ROM_PTR(&pcm_setfreq_obj)},
+    {MP_ROM_QSTR(MP_QSTR_pcm_setbuffer), MP_ROM_PTR(&pcm_setbuffer_obj)},
+    {MP_ROM_QSTR(MP_QSTR_pcm_get_freebuf), MP_ROM_PTR(&pcm_get_freebuf_obj)},
+    {MP_ROM_QSTR(MP_QSTR_pcm_push), MP_ROM_PTR(&pcm_push_obj)},
     {MP_ROM_QSTR(MP_QSTR_mp3initdecoder), MP_ROM_PTR(&mp3initdecoder_obj)},
     {MP_ROM_QSTR(MP_QSTR_mp3getnextframeinfo), MP_ROM_PTR(&mp3getnextframeinfo_obj)},
     {MP_ROM_QSTR(MP_QSTR_mp3decode), MP_ROM_PTR(&mp3decode_obj)},
