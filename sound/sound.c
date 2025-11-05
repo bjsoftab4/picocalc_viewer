@@ -510,12 +510,17 @@ static mp_obj_t pcm_setfreq(size_t n_args, const mp_obj_t *args) {
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_setfreq_obj, 1, 1, pcm_setfreq);
+volatile uint32_t pcm_last_dma_count;
+volatile uint32_t pcm_dma_wrap_count;
 
 static mp_obj_t pcm_start(size_t n_args, const mp_obj_t *args) {
+    pcm_last_dma_count = 0x0fffffff;
+    pcm_dma_wrap_count =0;
     pwm_dma_start();
     return mp_const_none;
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_start_obj, 0, 0, pcm_start);
+
 
 static mp_obj_t pcm_stop(size_t n_args, const mp_obj_t *args) {
     pwm_dma_stop();
@@ -523,10 +528,25 @@ static mp_obj_t pcm_stop(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_stop_obj, 0, 0, pcm_stop);
 
+
 static mp_obj_t pcm_get_freebuf(size_t n_args, const mp_obj_t *args) {
+    uint32_t cur;
+    cur = pwm_dma_get_count();
+    if( pcm_last_dma_count < cur){
+        pcm_dma_wrap_count ++;
+    }
+    pcm_last_dma_count = cur;
     return  mp_obj_new_int(pwm_dma_get_freebuf());
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_get_freebuf_obj, 0, 0, pcm_get_freebuf);
+
+static mp_obj_t pcm_get_transfer_count(size_t n_args, const mp_obj_t *args) {
+    uint32_t total;
+    total = pcm_dma_wrap_count * (pwm_buffer_byte / 4) + pwm_dma_get_curpos() ;
+    return  mp_obj_new_int(total);
+}
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(pcm_get_transfer_count_obj, 0, 0, pcm_get_transfer_count);
+
 
 static mp_obj_t pcm_push(size_t n_args, const mp_obj_t *args) {
     mp_buffer_info_t inbuf;
@@ -749,6 +769,7 @@ static const mp_rom_map_elem_t sound_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_pcm_setfreq), MP_ROM_PTR(&pcm_setfreq_obj)},
     {MP_ROM_QSTR(MP_QSTR_pcm_setbuffer), MP_ROM_PTR(&pcm_setbuffer_obj)},
     {MP_ROM_QSTR(MP_QSTR_pcm_get_freebuf), MP_ROM_PTR(&pcm_get_freebuf_obj)},
+    {MP_ROM_QSTR(MP_QSTR_pcm_get_transfer_count), MP_ROM_PTR(&pcm_get_transfer_count_obj)},
     {MP_ROM_QSTR(MP_QSTR_pcm_push), MP_ROM_PTR(&pcm_push_obj)},
     {MP_ROM_QSTR(MP_QSTR_mp3initdecoder), MP_ROM_PTR(&mp3initdecoder_obj)},
     {MP_ROM_QSTR(MP_QSTR_mp3getnextframeinfo), MP_ROM_PTR(&mp3getnextframeinfo_obj)},

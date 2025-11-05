@@ -176,8 +176,8 @@ void decode_core1_main() {
     core1_running = 1;
     docode_result = DecodeJPEG(&_jpeg);
     JPEGWaitDma();
-    uint8_t pageNum = JPEGGetDrawPage();
-    JPEGSetViewPage(pageNum);
+    //uint8_t pageNum = JPEGGetDrawPage();
+    //JPEGSetViewPage(pageNum);
 
     core1_running = 2;
     multicore_fifo_push_timeout_us(FIFO_CMD_DONE, 1000);    // wait 1000us
@@ -297,6 +297,8 @@ static mp_obj_t jpegdec_decode_core_wait(size_t n_args, const mp_obj_t *args) {
         }
     } 
     if (core1_running == 2) {
+        uint8_t pageNum = JPEGGetDrawPage();
+        JPEGSetViewPage(pageNum);
         result = docode_result;
         core1_running = 0;
     }
