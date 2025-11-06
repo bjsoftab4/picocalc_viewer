@@ -668,7 +668,7 @@ static mp_obj_t mp3getnextframeinfo(size_t n_args, const mp_obj_t *args) {
 
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp3getnextframeinfo_obj, 3, 3, mp3getnextframeinfo);
 
-static mp_obj_t mp3decode(size_t n_args, const mp_obj_t *args) {
+static mp_obj_t mp3decode2(size_t n_args, const mp_obj_t *args) {
     HMP3Decoder hMP3Decoder;
     unsigned char *buf;
     int bytes_left, buf_size;
@@ -683,17 +683,25 @@ static mp_obj_t mp3decode(size_t n_args, const mp_obj_t *args) {
     audiodata = (short *)abuf.buf;
     // args[4] is not used
 
-    int rc, err;
+    int err;
     err = MP3Decode(hMP3Decoder, &buf, &bytes_left, audiodata, 0);
-    if (err != ERR_MP3_NONE) {
-        rc = err;
-    } else {
-        rc = buf_size - bytes_left; // return processed bytes
-    }
-	return mp_obj_new_int(rc);
+    //if (err != ERR_MP3_NONE) {
+    //    rc = err;
+    //} else {
+    //    rc = buf_size - bytes_left; // return processed bytes
+    //}
+
+    int res0 = err;
+    int res1 = buf_size - bytes_left;
+    mp_obj_t res[2];
+        res[0]= mp_obj_new_int(res0);
+        res[1]= mp_obj_new_int(res1);
+	return mp_obj_new_tuple(2, res);
+
+	//return mp_obj_new_int(rc);
 }
 
-static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp3decode_obj, 5, 5, mp3decode);
+static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp3decode2_obj, 5, 5, mp3decode2);
 
 static mp_obj_t mp3pcm2dma(size_t n_args, const mp_obj_t *args) {
     int16_t *audioin;
@@ -773,7 +781,7 @@ static const mp_rom_map_elem_t sound_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_pcm_push), MP_ROM_PTR(&pcm_push_obj)},
     {MP_ROM_QSTR(MP_QSTR_mp3initdecoder), MP_ROM_PTR(&mp3initdecoder_obj)},
     {MP_ROM_QSTR(MP_QSTR_mp3getnextframeinfo), MP_ROM_PTR(&mp3getnextframeinfo_obj)},
-    {MP_ROM_QSTR(MP_QSTR_mp3decode), MP_ROM_PTR(&mp3decode_obj)},
+    {MP_ROM_QSTR(MP_QSTR_mp3decode2), MP_ROM_PTR(&mp3decode2_obj)},
     {MP_ROM_QSTR(MP_QSTR_mp3findsyncword), MP_ROM_PTR(&mp3findsyncword_obj)},
     {MP_ROM_QSTR(MP_QSTR_mp3pcm2dma), MP_ROM_PTR(&mp3pcm2dma_obj)},
 };
