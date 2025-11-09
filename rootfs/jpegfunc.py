@@ -5,22 +5,18 @@ import time
 
 import picocalc
 from picojpeg import PicoJpeg
+from mp3 import DecodeMP3, Pcm
+import sound
+import utils
 
 WMAX = 320
 HMAX = 320
-keyb = picocalc.keyboard
 
-
-def checkKey():
-    kc = keyb.keyCount()
-    if kc == 0:
-        return False
-    return True
-
+IDX_TIME = 1
 
 class JpegFunc:
     debug = const(False)
-    debug_time = const(True)
+    debug_time = const(False)
     JPEG_SCALE_HALF = const(2)
     JPEG_SCALE_QUARTER = const(4)
     JPEG_SCALE_EIGHTH = const(8)
@@ -34,7 +30,7 @@ class JpegFunc:
     buffers = [None] * BUFFERNUM
     buffers_pos = [-1] * BUFFERNUM
     buffers_len = [BUFFERSIZE] * BUFFERNUM
-
+    
     @classmethod
     def test_buffer(cls, ipos, ilen):  # retc = buffer idx
         idx = -1
@@ -204,7 +200,8 @@ class JpegFunc:
             cls.buffers_pos[buf_idx] = newpos
             fi.seek(newpos)
             cls.read_into_buf(fi, buf)
-            print(f"seek to {newpos},{newsize}, size={len(buf)}")
+            if cls.debug:
+                print(f"seek to {newpos},{newsize}, size={len(buf)}")
             jpginfo = PicoJpeg.decode_split_buffer(buf_idx, newpos, buf)
             if cls.debug:
                 print(jpginfo)
@@ -217,12 +214,14 @@ class JpegFunc:
             cls.buffers_pos[buf_idx] = newpos
             fi.seek(newpos)
             cls.read_into_buf(fi, buf)
-            print(f"preload seek to {newpos},{newsize}, size={len(buf)}")
+            if cls.debug:
+                print(f"preload seek to {newpos},{newsize}, size={len(buf)}")
             jpginfo = PicoJpeg.decode_split_buffer(buf_idx, newpos, buf)
 
         n_time = time.ticks_ms()
         dif = n_time - last
-        print(f"time: read={cls.time_read}, decode={t_decode}, total={dif}")
+        if cls.debug:
+            print(f"time: read={cls.time_read}, decode={t_decode}, total={dif}")
         cls.decoder_running = False
         return rc
 
@@ -311,8 +310,24 @@ class JpegFunc:
             )  # flip page
 
         cls.flipdrawpage()
-        return 0
+        return jpginfo
 
+    @classmethod
+    def play_movie2(cls, outfn, fps):
+        print(outfn)
+        if not outfn.endswith(".tar"):
+            if outfn.endswith((".jpg", ".jpeg")):
+                rc = cls.play_picture(outfn, fps)
+                return rc
+            return -1
+
+        try:
+            fi = io.open(outfn, mode="rb")
+        except (FileNotFoundError, PermissionError, IOError, ValueError):
+            return -1
+        rc = cls.play_tar(fi, None, fps)
+        fi.close()
+        return rc
     @classmethod
     def play_movie(cls, outfn, fps):
         print(outfn)
@@ -329,6 +344,47 @@ class JpegFunc:
         rc = cls.extract_tar(fi, fps)
         fi.close()
         return rc
+
+
+    @classmethod
+    def play_movie3(cls, outfn, mp3fn = None):
+        print(outfn)
+        if not outfn.endswith('.tar'):
+            return -1
+        
+        try:
+            fi = io.open(outfn, mode='rb')
+        except :
+            return -1
+        
+        if mp3fn != None:
+            try:
+                mp3fi = io.open(mp3fn, mode='rb')
+            except :
+                return -1
+        else:
+            mp3fi = None
+        rc = cls.play_tar(fi, mp3fi)
+        fi.close()
+        return rc
+    
+
+    @classmethod
+    def fillPcmbuff(cls):
+        rc = 0
+        if not DecodeMP3.mp3file_find_sync_word():
+            rc = -1
+        if Pcm.get_freebuf() > len(DecodeMP3.pcmbuf) // 4 // 2:
+            rc = DecodeMP3.part_decode()
+            if rc == 1: # new mp3 file
+                return 2
+            if rc < 0:
+                return -1
+            rc = DecodeMP3.fillfilebuffer()
+            if rc < 0:
+                return -1
+            return 1
+        return 0
 
     @classmethod
     def extract_tar(cls, fi, fps):
@@ -359,10 +415,11 @@ class JpegFunc:
                 rc = 0
                 break  # EOF or bad data
 
-            if checkKey():
+            if utils.checkKey():
                 break
             lap1 = time.ticks_ms()
             rc = cls.showjpeg(buf, True)
+            rc = rc[0]
 
             n_time = time.ticks_ms()
             dif = n_time - last
@@ -379,6 +436,220 @@ class JpegFunc:
         return rc
 
     @classmethod
+    def play_tar(cls, fp_tar, fp_mp3 = None, argfps = 12):
+        sec = 0
+        ret = utils.analyze_tar(fp_tar)
+        if ret is None:
+            fps = argfps
+            jpgtoc = None
+            idxpos = None
+            mp3pos = 0
+            jpgpos = 0
+        else:
+            fps, jpgtoc, idxpos, mp3pos, jpgpos = ret
+            if fps is None:
+                fps = argfps
+            #print(ret)
+        tar_info = (fps, jpgtoc, idxpos, mp3pos, jpgpos)
+        PicoJpeg.clear()
+        if fp_mp3 is not None:
+            if mp3pos != None:
+                DecodeMP3.prolog(fp_mp3, mp3pos + 512, jpgpos - mp3pos - 512)     #tar
+                rc = DecodeMP3.skip_id3v2()
+                if rc < 0:
+                    return None
+                if not DecodeMP3.mp3file_find_sync_word():
+                    return None
+                rc = DecodeMP3.fillfilebuffer()
+                if rc < 0:
+                    return None
+                rc = DecodeMP3.look_for_1stframe()
+                rc = DecodeMP3.getframeinfo(DecodeMP3.decoder, DecodeMP3.frameinfo)
+                if rc < 0:
+                    return None
+                # utils.hexdump(DecodeMP3.frameinfo, "frameinfo")
+            else:
+                fp_mp3 = None
+
+        rc = 0
+        while True:
+            retc = cls.play_tar_from(fp_tar, fp_mp3, sec, tar_info)
+            if retc is None:
+                break
+            print(retc)
+            rc, sec = retc
+            if rc == 1: # seek forward
+                continue
+            if rc == 2: # next movie
+                break
+            if rc == 3: # previous movie
+                break
+            if rc == 9: # quit
+                break
+        if fp_mp3 is not None:            
+            DecodeMP3.epilogue()
+            print("MP3 epilogue")
+        if cls.decoder_running:
+            jpginfo = PicoJpeg.decode_core_wait()
+            cls.decoder_running = False
+        return rc
+
+
+    @classmethod
+    def play_tar_from(cls, fp_tar, fp_mp3, startsec, tar_info):
+        print("Start play tar from", startsec, "sec")
+        fps, jpgtoc, idxpos, mp3pos, jpgpos = tar_info
+
+        def mainloop(startmin):
+            startsec = startmin * 60
+            rc = 0
+            headbuf = bytearray(512)
+            
+            sleeptotal = 0
+            skipcount=0
+            readtime_us = 0
+            mp3time_us = 0
+            
+            # preload
+            jpgload_req = True
+            frame_number = startmin * 60 * fps
+            mp3play_req = False
+            frame_start = frame_number
+            t_start = time.ticks_ms()
+            while True:
+                last = time.ticks_ms()
+                start_us = time.ticks_us()
+                
+                if utils.checkKey():  # 早送りなどの検出
+                    rc = 0
+                    sec = int(frame_number / fps)
+                    st = utils.getKeystring()
+                    if ' ' in st:
+                        if jpgtoc != None:
+                            sec += 60  
+                            DecodeMP3.pause()
+                            return (1,sec)
+                    if 'N' in st:
+                        DecodeMP3.pause()
+                        retc = 4
+                        break
+                    if 'P' in st:
+                        DecodeMP3.pause()
+                        retc = 5
+                        break
+                    if 'n' in st:
+                        DecodeMP3.pause()
+                        return (2,0)
+                    if 'p' in st:
+                        DecodeMP3.pause()
+                        return (3,0)
+                    if 'q' in st:
+                        DecodeMP3.pause()
+                        return (9,0)
+                    utils.waitKeyOff()
+                    continue
+
+                if jpgload_req:
+                    if startmin >= 0:
+                        if jpgtoc != None:
+                            if startmin >= len(jpgtoc) - 1:
+                                break
+                            fp_tar.seek(jpgpos + jpgtoc[startmin], 0)
+                        else:
+                            fp_tar.seek(0, 0)
+                        #print("fptar seek jpgpos", jpgpos, "startmin", startmin, "jpgtoc[startmin]", jpgtoc[startmin])
+                        startmin = -1
+                    retc = utils.read_tar_header(fp_tar, headbuf)
+                    if retc is None:
+                        utils.hexdump(headbuf, "headbuf")
+                        return None
+                    fn, sz, sz0 = retc
+                    if fn.endswith((".jpg",".jpeg")) is False:
+                        fp_tar.seek(sz, 1)  # Do not read, skip
+                        continue
+                    buf = fp_tar.read(sz)
+
+                    rd = len(buf)
+                    if rd != sz:
+                        rc = 0
+                        print("bad file size, or EOF")
+                        break  # EOF or bad data
+                    lap = time.ticks_diff(time.ticks_us(), start_us)
+                    if lap > 100_000:
+                        print("Too slow to read")
+                    readtime_us += lap
+                    jpgload_req = False
+
+                
+                #初回JPEGデコード
+                if not mp3play_req:
+                    # show 1st frame
+                    rc = cls.showjpeg(buf, True)
+                    #print (rc)
+                    mp3play_req = True
+                    jpgload_req = True
+                    frame_number += 1
+                    continue
+                    
+                #PCM再生
+                rc = 0
+                mp3start_us = time.ticks_us()
+                if fp_mp3 is not None:
+                    while mp3play_req:
+                        rc = cls.fillPcmbuff()
+                        if rc == 2:     # start PCM
+                            continue
+                        if rc == 1:     # add PCM data
+                            continue
+                        break           # error or PCM buffer full
+                mp3time_us += time.ticks_diff(time.ticks_us(), mp3start_us)
+                if rc < 0:
+                    break
+
+                #タイミング調整
+                if fp_mp3 is not None:
+                    targettime_ms = int(DecodeMP3.getplaytime()  * 1000) - 80
+                else:
+                    targettime_ms = time.ticks_diff(time.ticks_ms(), t_start)
+                margin = time.ticks_diff(1000 * (frame_number - frame_start) // fps, targettime_ms)
+                if margin > 20:
+                    time.sleep_ms(10)
+                    sleeptotal += 10
+                    continue
+
+                if margin > 0:
+                    time.sleep_ms(margin)
+                    sleeptotal += margin
+                else:
+                    pass
+                
+                if fp_mp3 is not None:
+                    mp3start_us = time.ticks_us()
+                    if startsec >= 0:
+                        if DecodeMP3.mp3seek(startsec, False) < 0:
+                            break
+                        startsec = -1
+                    mp3time_us += time.ticks_diff(time.ticks_us(), mp3start_us)
+
+                if margin > -50:
+                    rc = cls.showjpeg(buf, True)
+                    #print (rc)
+                    mp3play_req = True
+                else:
+                    skipcount += 1
+                    if skipcount < 10:
+                        print("skip", skipcount)
+                jpgload_req = True
+                frame_number += 1
+        retc = mainloop(startsec // 60)
+        return retc
+        #print(f"frames={framecount}, skip={skipcount}, sleep={sleeptotal}, total={i * waitms}, busy={100-int(100*sleeptotal/(i * waitms))}")
+        #print(f"readtime={readtime_us / 1000_000}sec, mp3time={mp3time_us / 1000_000}sec")
+        #time.sleep_ms(500)
+
+
+    @classmethod
     def pictview(cls, outfn, fps):
         rc = cls.play_movie(outfn, fps)
         return rc
+ 
