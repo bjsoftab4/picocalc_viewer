@@ -35,12 +35,12 @@ make USER_C_MODULES="Path/To/picocalc_viewer/micropython.cmake" \
   BOARD=RPI_PICO2_W
 ```
 
-ファームウェアを書き込んだ後に rootfs/ 全ファイルを ROMFSへコピーする
+ファームウェアを書き込んだ後に rootfs/ 全ファイルをFLASHファイルシステムへコピーする
 
 
 ## 配布ファイル説明
 
-- ビルド済みファームウェア　ROMFS 部分はありません。ROMFSありの公式ファームをまず書き込んでください。
+- ビルド済みファームウェア　FLASHファイルシステム部分はありません。FLASHファイルシステムありの公式ファームをまず書き込んでください。
   - picocalc-micropython-movieplayer-NOFLASH.uf2    JPEG decoder + MP3 decoder + movie player
   - picocalc-micropython-sound-NOFLASH.uf2          JPEG decoder + MP3 decoder （古い）
   - picocalc-micropython-jpegdec-NOFLASH.uf2        JPEG decoder （古い） 
@@ -83,3 +83,4 @@ SDファイル内の jpeg ファイルを連続再生するプログラム　画
 - tools
   - maketar.py\
     指定した *.mp4 ファイルをA/V 分離し、JPEG変換、mp3変換し、 *.tar にまとめるプログラム
+
