@@ -476,19 +476,17 @@ class JpegFunc:
             retc = cls.play_tar_from(fp_tar, fp_mp3, sec, tar_info)
             if retc is None:
                 break
-            print(retc)
+            #print(retc)
             rc, sec = retc
             if rc == 1: # seek forward
                 continue
-            if rc == 2: # next movie
-                break
-            if rc == 3: # previous movie
+            if 2 <= rc and rc <= 5 : # next/previous movie
                 break
             if rc == 9: # quit
                 break
         if fp_mp3 is not None:            
             DecodeMP3.epilogue()
-            print("MP3 epilogue")
+            #print("MP3 epilogue")
         if cls.decoder_running:
             jpginfo = PicoJpeg.decode_core_wait()
             cls.decoder_running = False
@@ -497,7 +495,7 @@ class JpegFunc:
 
     @classmethod
     def play_tar_from(cls, fp_tar, fp_mp3, startsec, tar_info):
-        print("Start play tar from", startsec, "sec")
+        #print("Start play tar from", startsec, "sec")
         fps, jpgtoc, idxpos, mp3pos, jpgpos = tar_info
 
         def mainloop(startmin):
@@ -531,12 +529,10 @@ class JpegFunc:
                             return (1,sec)
                     if 'N' in st:
                         DecodeMP3.pause()
-                        retc = 4
-                        break
+                        return (4,0)
                     if 'P' in st:
                         DecodeMP3.pause()
-                        retc = 5
-                        break
+                        return (5,0)
                     if 'n' in st:
                         DecodeMP3.pause()
                         return (2,0)
@@ -546,7 +542,7 @@ class JpegFunc:
                     if 'q' in st:
                         DecodeMP3.pause()
                         return (9,0)
-                    utils.waitKeyOff()
+                    #utils.waitKeyOff()
                     continue
 
                 if jpgload_req:
@@ -561,7 +557,7 @@ class JpegFunc:
                         startmin = -1
                     retc = utils.read_tar_header(fp_tar, headbuf)
                     if retc is None:
-                        utils.hexdump(headbuf, "headbuf")
+                        #utils.hexdump(headbuf, "headbuf")
                         return None
                     fn, sz, sz0 = retc
                     if fn.endswith((".jpg",".jpeg")) is False:
@@ -637,8 +633,8 @@ class JpegFunc:
                     mp3play_req = True
                 else:
                     skipcount += 1
-                    if skipcount < 10:
-                        print("skip", skipcount)
+                    if skipcount == 10:
+                        print("Too many skips >=", skipcount)
                 jpgload_req = True
                 frame_number += 1
         retc = mainloop(startsec // 60)

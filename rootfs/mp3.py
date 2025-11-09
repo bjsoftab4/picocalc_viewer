@@ -533,7 +533,7 @@ class DecodeMP3:
             if utils.checkKey():
                 st = utils.getKeystring()
                 if ' ' in st:
-                    sec = (cls.fsize - cls.fileremain) / cls.br0 * 8
+                    sec = (cls.fsize - cls.fileremain) / cls.basebr * 8
                     #print("sec=",sec)
                     if cls.mp3seek(sec + 10) < 0:
                         break
@@ -579,51 +579,7 @@ class DecodeMP3:
         total_ms = time.ticks_ms() - t_start
         #print(f"wait_ms={int(wait_us/1000)}, total_ms={total_ms}, CPU LOAD={100-int(wait_us/10/total_ms)}%")
         return retc
-"""        
-def isdir(dname):
-    st = os.stat(dname)
-    if st[6] == 0:
-        return True
-    return False
 
-def dirplay(dname):
-    flist = os.listdir(dname)
-    flist.sort()
-    print("Scan directory:"+dname)
-    dirlist = [
-        f for f in flist if isdir(dname+"/"+f)
-    ]
-    for d in dirlist:
-        rc = dirplay(dname + "/" + d)
-        if rc < 0 :
-            return -1
-    filelist = [
-        f for f in flist if not isdir(dname+"/"+f) and f.endswith((".mp3",".MP3"))
-    ]
-    print("File list:", filelist)
-    i = 0
-    while i < len(filelist):
-        utils.waitKeyOff()
-
-        fn = dname + "/" + filelist[i]
-        
-        if fn.endswith((".mp3",".MP3")):
-           print(fn)
-           retc = DecodeMP3.mainloop(fn)
-    
-        if retc == 9:
-            rc = -1
-            return -1
-        if retc == 2:
-            break
-        if retc == 3:
-            i = i - 1
-            if( i < 0):
-                i = 0
-            continue
-        i+=1
-    return 0
-"""          
 def run(fdir = "/sd"):
     Pcm.init()
     try:

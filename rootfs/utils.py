@@ -43,7 +43,6 @@ def scan_dir(dname, func, ext=(".mp3",".MP3")):
     ]
     i = 0
     while i < len(dirlist):
-        waitKeyOff()
         d = dirlist[i]
         rc = scan_dir(dname + "/" + d, func, ext)
         if rc < 0 :
@@ -61,14 +60,14 @@ def scan_dir(dname, func, ext=(".mp3",".MP3")):
     filelist = [
         f for f in flist if not isdir(dname+"/"+f) and f.endswith(ext)
     ]
+    filelist.sort()
     print("File list:", filelist)
     i = 0
     while i < len(filelist):
-        waitKeyOff()
-
         fn = dname + "/" + filelist[i]
         
         if fn.endswith(ext):
+            waitKeyOff()
             rc = func(fn)
             if rc == 9: #quit
                 break
@@ -126,11 +125,11 @@ def read_idx(fp_tar):
 def read_tar_header(fi, headbuf):
     rd = fi.readinto(headbuf)  # read tar header
     if rd != 512:
-        print("read tar header EOF")
+        print("EOF")
         return None
     fn=headbuf[0:100].rstrip(b"\0").decode()
     if len(fn) == 0:
-        print("bad tar header EOF")
+        print("EOF")
         return None
     sz = int(headbuf[0x7c:0x87].decode(),8)
     sz0 = sz
