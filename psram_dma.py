@@ -5,28 +5,28 @@ import uos
 
 class PsramDevice:
     sm_init_flag = False
+    CS_PIN=20           # cs:GP20
+    CLK_PIN=21          # sck:GP21
+    SIDESET_PINS = CLK_PIN   # sck:GP21
+    BASE_PINS = 2       # for QSPI : TX,DIO0:GP2, RX,DIO1:GP3, DIO2:GP4, DIO3:GP5
+    SPI_OUT_BASE_PIN = 2# for SPI:   TX:GP2, RX:GP3
+    SPI_IN_BASE_PIN = 3
     
-    def __init__(self):
+    def __init__(self, blocknum=4096*1024//512):    # size = 4MiB 
         FREQ = 2_000_000
         FREQ_HI = 10_000_000
         FREQ_HI_RD = 10_000_000
-        CS_PIN=20
-        CLK_PIN=21
-        SIDESET_PINS = 21  # cs:GP20, sck:GP21
-        BASE_PINS = 2   # TX,DIO0:GP2, RX,DIO1:GP3, DIO2:GP4, DIO3:GP5
-        SPI_OUT_BASE_PIN = 2
-        SPI_IN_BASE_PIN = 3
 
-        self.tx = Pin(SPI_OUT_BASE_PIN)
-        self.rx = Pin(SPI_IN_BASE_PIN)
-        self.clk = Pin(CLK_PIN, mode=Pin.OUT, pull=Pin.PULL_UP, value=0)
-        self.cs = Pin(CS_PIN, mode = Pin.OUT, value=1)
-        self.dio0 = Pin(BASE_PINS)
-        self.dio1 = Pin(BASE_PINS+1)
-        self.dio2 = Pin(BASE_PINS+2)
-        self.dio3 = Pin(BASE_PINS+3)
+        self.tx = Pin(PsramDevice.SPI_OUT_BASE_PIN)
+        self.rx = Pin(PsramDevice.SPI_IN_BASE_PIN)
+        self.clk = Pin(PsramDevice.CLK_PIN, mode=Pin.OUT, pull=Pin.PULL_UP, value=0)
+        self.cs = Pin(PsramDevice.CS_PIN, mode = Pin.OUT, value=1)
+        self.dio0 = Pin(PsramDevice.BASE_PINS)
+        self.dio1 = Pin(PsramDevice.BASE_PINS+1)
+        self.dio2 = Pin(PsramDevice.BASE_PINS+2)
+        self.dio3 = Pin(PsramDevice.BASE_PINS+3)
 
-        self.sectors = 4096 * 1024 // 512
+        self.sectors = blocknum
 
         self.tx.init(self.tx.OPEN_DRAIN, self.tx.PULL_UP)
         self.rx.init(self.rx.IN, self.rx.PULL_UP)
@@ -35,14 +35,7 @@ class PsramDevice:
         PsramDevice.sm_start(FREQ, FREQ_HI, FREQ_HI_RD)
 
     @classmethod
-    def sm_start(cls, FREQ = 2_000_000, FREQ_HI = 25_000_000, FREQ_HI_RD = 30_000_000):
-        CS_PIN=20
-        CLK_PIN=21
-        SIDESET_PINS = 21  # cs:GP20, sck:GP21
-        BASE_PINS = 2   # TX,DIO0:GP2, RX,DIO1:GP3, DIO2:GP4, DIO3:GP5
-        SPI_OUT_BASE_PIN = 2
-        SPI_IN_BASE_PIN = 3
-
+    def sm_start(cls, FREQ = 2_000_000, FREQ_HI = 10_000_000, FREQ_HI_RD = 10_000_000):
         # PIO definition
         @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW, out_init=rp2.PIO.OUT_HIGH)
         def spiwrite_one():
@@ -92,10 +85,10 @@ class PsramDevice:
             cls.sm_qspi_wr_num = 1
             cls.sm_qspi_rd_num = 2
             cls.sm_qspi_rd2_num = 3
-            cls.sm_spi_wr = rp2.StateMachine(0, spiwrite_one, freq=FREQ, sideset_base=Pin(CLK_PIN), out_base=Pin(SPI_OUT_BASE_PIN))
-            cls.sm_qspi_wr = rp2.StateMachine(1, spiwrite_quad, freq=FREQ_HI, sideset_base=Pin(CLK_PIN), out_base=Pin(BASE_PINS))
-            cls.sm_qspi_rd = rp2.StateMachine(2, spiread_quad, freq=FREQ_HI_RD, sideset_base=Pin(CLK_PIN), in_base=Pin(BASE_PINS),set_base=Pin(BASE_PINS))
-            cls.sm_qspi_rd2 = rp2.StateMachine(3, spiread_quad, freq=FREQ_HI_RD, sideset_base=Pin(CLK_PIN), in_base=Pin(BASE_PINS),set_base=Pin(BASE_PINS))
+            cls.sm_spi_wr = rp2.StateMachine(0, spiwrite_one, freq=FREQ, sideset_base=Pin(cls.CLK_PIN), out_base=Pin(cls.SPI_OUT_BASE_PIN))
+            cls.sm_qspi_wr = rp2.StateMachine(1, spiwrite_quad, freq=FREQ_HI, sideset_base=Pin(cls.CLK_PIN), out_base=Pin(cls.BASE_PINS))
+            cls.sm_qspi_rd = rp2.StateMachine(2, spiread_quad, freq=FREQ_HI_RD, sideset_base=Pin(cls.CLK_PIN), in_base=Pin(cls.BASE_PINS),set_base=Pin(cls.BASE_PINS))
+            cls.sm_qspi_rd2 = rp2.StateMachine(3, spiread_quad, freq=FREQ_HI_RD, sideset_base=Pin(cls.CLK_PIN), in_base=Pin(cls.BASE_PINS),set_base=Pin(cls.BASE_PINS))
 
             cls.sm_spi_wr.active(1)
             cls.sm_qspi_wr.active(1)
@@ -162,22 +155,28 @@ class PsramDevice:
                 pass
             return src[0]
     
-    @micropython.native    
+    @micropython.viper    
     def spi_write(self, data):
-        for b in data:
-            self.pio_push(int(b),24, self.sm_spi_wr_num)
-            self.pio_pull(self.sm_spi_wr_num)
+        num = self.sm_spi_wr_num
+        buf = ptr(data)
+        size = int(len(data))
+        for i in range(size):
+            b = data[i]
+            self.pio_push(b,24, num)
+            self.pio_pull(num)
             #self.sm_spi_wr.put(int(b), 24)
             #self.sm_spi_wr.get()
     
-    @micropython.native    
+    @micropython.viper    
     def qspi_write(self, data):
-        self.sm_qspi_wr.put(len(data) - 1)
-        for i in range(len(data)):
+        num = self.sm_qspi_wr_num
+        self.pio_push(int(len(data)) - 1, 0, num)
+        #self.sm_qspi_wr.put(int(len(data)) - 1)
+        for i in range(int(len(data))):
             val = data[i]
-            self.pio_push(val, 24, self.sm_qspi_wr_num)
+            self.pio_push(val, 24, num)
             #self.sm_qspi_wr.put(val,24)
-        self.pio_pull(self.sm_qspi_wr_num)
+        self.pio_pull(num)
         #self.sm_qspi_wr.get()
     
     @micropython.native    
@@ -188,11 +187,14 @@ class PsramDevice:
             data[i] = self.sm_qspi_rd.get() & 0xff
         return data
 
-    
+    @micropython.native    
     def qspi_readinto(self, data):
-        self.sm_qspi_rd.put(len(data) - 1)
+        num = self.sm_qspi_rd_num
+        self.pio_push(int(len(data)) - 1, 0, num)
+        #self.sm_qspi_rd.put(len(data) - 1)
         for i in range(len(data)):
-            data[i] = self.sm_qspi_rd.get() & 0xff
+            data[i] = self.pio_pull(num)
+            #data[i] = self.sm_qspi_rd.get() & 0xff
         return len(data)
 
     def psram_write_spi(self, addr, data):
@@ -211,7 +213,7 @@ class PsramDevice:
         self.cs.value(1)
 
     @micropython.native
-    def psram_write_quad_dma(self, addr, data): #fast read cmd
+    def psram_write_quad_dma(self, addr, data):
         cmd = bytearray([0x38])
         cmd2 = addr.to_bytes(3, 'big')
         self.cs.value(0)
@@ -221,7 +223,7 @@ class PsramDevice:
 
         length = len(data)
         self.sm_qspi_wr.put(length - 1)
-        DmaPio.write_start(data, self.sm_qspi_wr_num) #SM=1
+        DmaPio.write_start(data, self.sm_qspi_wr_num)
         DmaPio.write_wait()
         self.cs.value(1)
         while self.sm_qspi_wr.rx_fifo() > 0:
@@ -243,14 +245,15 @@ class PsramDevice:
         return 
       
     @micropython.native
-    def psram_readinto_quad_dma(self, addr, buff): #fast read cmd
-        cmd = bytearray([0xEB])
+    def psram_readinto_quad_dma(self, addr, buff):
+        cmd = bytearray([0xEB]) #fast read cmd
         cmd2 = addr.to_bytes(3, 'big')
         self.cs.value(0)
         self.spi_write(cmd)
         self.qspi_write(cmd2)
         time.sleep_us(1)
-        self.qspi_read(buff[0:3])    # dummy read
+        
+        self.qspi_readinto(buff[0:3])    # dummy read
         length = len(buff)
         DmaPio.read_start(buff, self.sm_qspi_rd_num)  #SM = 2
         self.sm_qspi_rd.put(length - 1)
@@ -265,7 +268,6 @@ class PsramDevice:
     def readblocks(self, block_num, buf):
         nblocks = len(buf) // 512
         mv = memoryview(buf)
-        #print(f"readblocks num={block_num},n={nblocks}")
         for i in range(nblocks):
             offset = i * 512
             #self.psram_readinto_quad(block_num * 512 + offset, mv[offset + 0:offset + 512])
@@ -294,6 +296,11 @@ class DmaPio:
     rxdma = None
     rxdst = 0
     
+    @classmethod
+    def closeall(cls):
+        cls.read_close()
+        cls.write_close()
+
     @classmethod
     def read_start(cls, data, rx_sm):
         @micropython.viper
@@ -363,7 +370,7 @@ class DmaPio:
         cls.txdma = None
     
 def mount(point="/psram"):
-        psramdisk=PsramDevice()
+        psramdisk=PsramDevice(4096*1024//512)   # block
         try:
             uos.mount(psramdisk, point)
         except:
@@ -375,7 +382,7 @@ def mount(point="/psram"):
                 print("Mount existed filesystem:"+point)
         if not found:
             print("Creating filesystem")
-            buf=bytearray(512)
+            buf=bytearray([0]*512)
             psramdisk.writeblocks(0,buf)    #erase 1st sector
             uos.VfsFat.mkfs(psramdisk)
             uos.mount(psramdisk, point)
