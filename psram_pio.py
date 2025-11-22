@@ -55,7 +55,7 @@ class PsramDevice:
             label("BYTE")
             out(pins, 1).side(0)#5
             jmp(x_dec, "BYTE").side(1)       #6: CLK = HI  (tSA = 1clk, tHD = 1clk)
-            push()              #7
+            push().side(0)              #7
             wrap()
 
         @rp2.asm_pio(sideset_init=rp2.PIO.OUT_LOW, out_init=(rp2.PIO.OUT_HIGH,rp2.PIO.OUT_HIGH,rp2.PIO.OUT_HIGH,rp2.PIO.OUT_HIGH))
