@@ -1,11 +1,11 @@
-# micropython for picocalc with JPEGDEC, Adafruit_MP3
+# micropython for picocalc with JPEGDEC, Adafruit_MP3, and PSRAM driver
 - bitbank2/JPEGDEC を使用して、picocalc で jpeg　画像を表示する。
 - adafruit/Adafruit_MP3 を使用して、picocalc で MP3 を再生する。
 - 上記を併用して、picocalc で音声付き動画を再生する。
 
 zenodante/PicoCalc-micropython-driver を大幅に改造しているので、原本を fork したものとは別のリポジトリにしている。
 
-PSRAMを RAMディスクとして使うドライバもあります。（単体で使えます）
+PSRAMを RAMディスクとして使うドライバも置いてます。（これはビルド不要で単体で使えます）
 
 ## buildの前提
 
@@ -85,15 +85,9 @@ SDファイル内の jpeg ファイルを連続再生するプログラム　画
   - maketar.py\
     指定した *.mp4 ファイルをA/V 分離し、JPEG変換、mp3変換し、 *.tar にまとめるプログラム
 
-- psram.py, psram_pio.py, psram_dma.py
-  PSRAMを /psram にマウントするRAMディスク
+- psram.py, psram_dma.py
+  PSRAMを /psram にマウントするRAMディスクドライバ
   - psram.py\
     softSPIを使った psram にアクセスする。
-  - psram_pio.py\
-    PIO を使って QSPI 信号を使って psram にアクセスする。
   - psram_dma.py\
-    PIO と DMA を使ってアクセスする。（今のところ一番速い）
-  
-
-
-
+    PIO と DMA を使って psram にアクセスする。
